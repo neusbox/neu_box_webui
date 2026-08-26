@@ -7,7 +7,7 @@ Neu Box 的中心节点：节点池管理、任务转发、实验记录、Web �
 
 | 仓库 | 角色 | 版本 |
 |---|---|---|
-| [neu_box](https://github.com/nihaopeng/neu_box) | worker（节点侧设备沙盒）+ 聚合（e2e 测试、submodule 兼容矩阵） | 0.3.0+ |
+| [neu_box](https://github.com/neusbox/neu_box) | worker（节点侧设备沙盒）+ 聚合（e2e 测试、submodule 兼容矩阵） | 0.3.0+ |
 | **neu_box_webui**（本仓库） | WebUI / master | 0.0.1+ |
 | [neu_box_goClient](https://github.com/neusbox/neu_box_goClient) | Go 客户端 `neu-sbox`（直连 worker） | 0.0.1+ |
 
