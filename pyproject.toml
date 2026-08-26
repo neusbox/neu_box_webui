@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neu-box-webui"
+dynamic = ["version"]
+description = "Neu Box WebUI (master): node pool, task forwarding, experiment records and web UI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "Neu Box contributors" },
+]
+classifiers = [
+    "Private :: Do Not Upload",
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "Flask>=3.0,<4",
+    "python-dotenv>=1.0,<2",
+    "waitress>=3.0,<4",
+    "bcrypt>=4.0,<6",
+    "requests>=2.28,<3",
+]
+
+[project.scripts]
+neu-box-webui = "neu_box_webui.master.app:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+]
+build = [
+    "pyinstaller>=6.15,<7",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "neu_box_webui.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"neu_box_webui.master" = [
+    "migrations/*.sql",
+    "static/**/*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+pythonpath = ["src"]

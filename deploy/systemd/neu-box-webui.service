@@ -1,0 +1,24 @@
+[Unit]
+Description=Neu Box WebUI (master)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=neu-box
+Group=neu-box
+WorkingDirectory=/var/lib/neu-box/master
+EnvironmentFile=/etc/neu-box/webui.env
+ExecStart=/opt/neu-box/webui/current/master/neu-box-webui --config /etc/neu-box/webui.env serve
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/etc/neu-box/nodes.json /var/lib/neu-box/master /var/log/neu-box
+
+[Install]
+WantedBy=multi-user.target
