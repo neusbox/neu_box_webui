@@ -110,12 +110,12 @@ def _init_admin() -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="neu-box-master",
-        description="Neu Box Master 服务与数据库管理",
+        prog="neu-box-webui",
+        description="Neu Box WebUI 服务与数据库管理",
     )
     parser.add_argument(
         "--config",
-        help="环境配置文件；默认使用 NEU_BOX_CONFIG 或 /etc/neu-box/master.env",
+        help="环境配置文件；默认使用 NEU_BOX_CONFIG 或 /etc/neu-box/webui.env",
     )
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -129,7 +129,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        load_role_environment("master", args.config)
+        load_role_environment("webui", args.config)
         if args.command == "db":
             return run_database_command(
                 args,
@@ -157,10 +157,9 @@ def main(argv: list[str] | None = None) -> int:
             pool.stop_polling()
         return 0
     except (ConfigError, MigrationError, OSError, ValueError) as exc:
-        print(f"neu-box-master: {exc}", file=sys.stderr)
+        print(f"neu-box-webui: {exc}", file=sys.stderr)
         return 1
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
