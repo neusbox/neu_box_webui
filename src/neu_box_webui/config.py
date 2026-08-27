@@ -12,6 +12,14 @@ class ConfigError(RuntimeError):
     """Configuration cannot be loaded safely."""
 
 
+def project_runtime_dir() -> Path:
+    """Return the project-local runtime root used by source deployments."""
+    raw_path = os.getenv("NEU_BOX_RUNTIME_DIR", "").strip()
+    if raw_path:
+        return Path(raw_path).expanduser().resolve()
+    return (Path(__file__).resolve().parents[2] / "runtime").resolve()
+
+
 def load_role_environment(
     role: str,
     explicit_path: str | os.PathLike[str] | None = None,
@@ -25,6 +33,12 @@ def load_role_environment(
         load_dotenv(path, override=False)
         return path
 
+    local_path = project_runtime_dir() / "config" / f"{role}.env"
+    if local_path.is_file():
+        load_dotenv(local_path, override=False)
+        return local_path
+
+    # Compatibility fallback for existing system-wide deployments.
     system_path = Path(f"/etc/neu-box/{role}.env")
     if system_path.is_file():
         load_dotenv(system_path, override=False)
@@ -51,20 +65,23 @@ def env_int(name: str, default: int, legacy: str | None = None) -> int:
 
 def user_data_dir(role: str) -> Path:
     root = os.getenv("XDG_DATA_HOME", "").strip()
-    base = Path(root).expanduser() if root else Path.home() / ".local" / "share"
-    return (base / "neu-box" / role).resolve()
+    if root:
+        return (Path(root).expanduser() / "neu-box" / role).resolve()
+    return (project_runtime_dir() / "data" / role).resolve()
 
 
 def user_config_dir() -> Path:
     root = os.getenv("XDG_CONFIG_HOME", "").strip()
-    base = Path(root).expanduser() if root else Path.home() / ".config"
-    return (base / "neu-box").resolve()
+    if root:
+        return (Path(root).expanduser() / "neu-box").resolve()
+    return (project_runtime_dir() / "config").resolve()
 
 
 def user_log_dir() -> Path:
     root = os.getenv("XDG_STATE_HOME", "").strip()
-    base = Path(root).expanduser() if root else Path.home() / ".local" / "state"
-    return (base / "neu-box" / "logs").resolve()
+    if root:
+        return (Path(root).expanduser() / "neu-box" / "logs").resolve()
+    return (project_runtime_dir() / "logs").resolve()
 
 
 def configured_path(
@@ -74,4 +91,3 @@ def configured_path(
 ) -> Path:
     value = env_text(name, legacy=legacy)
     return Path(value).expanduser().resolve() if value else default.resolve()
-

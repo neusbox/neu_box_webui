@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import logging
 import os
 import secrets
@@ -33,6 +34,7 @@ from neu_box_webui.master.services.db import (
 
 
 logger = logging.getLogger("master")
+DEFAULT_ADMIN_PASSWORD = "231415926@qq.com"
 
 
 def create_app() -> flask.Flask:
@@ -93,8 +95,8 @@ def create_app() -> flask.Flask:
 def _init_admin() -> None:
     db = Database.get_instance()
     admin_user = env_text("ADMIN_USER", "admin")
-    admin_pass = env_text("ADMIN_PASS", "admin")
-    if db.get_user(admin_user):
+    admin_pass = env_text("ADMIN_PASS", DEFAULT_ADMIN_PASSWORD)
+    if db.get_user_by_username(admin_user):
         logger.info("管理员账号已存在: %s", admin_user)
         return
     uid = db.create_user(admin_user, admin_pass, role="admin")
@@ -108,6 +110,53 @@ def _init_admin() -> None:
         logger.warning("创建管理员失败（可能已存在）")
 
 
+def _reset_admin_password(username: str, password: str) -> str:
+    """显式创建管理员或重置其密码；启动服务时不会自动覆盖已有密码。"""
+    username = username.strip()
+    if not username:
+        raise ValueError("管理员用户名不能为空")
+    if len(password) < 4:
+        raise ValueError("管理员密码至少 4 位")
+
+    db = Database.get_instance()
+    user = db.get_user_by_username(username)
+    if user:
+        if not db.update_password(user["id"], password):
+            raise ValueError(f"管理员密码重置失败: {username}")
+        return "updated"
+
+    uid = db.create_user(username, password, role="admin")
+    if not uid:
+        raise ValueError(f"管理员创建失败: {username}")
+    return "created"
+
+
+def _run_admin_command(args: argparse.Namespace) -> int:
+    username = (args.username or env_text("ADMIN_USER", "admin")).strip()
+    if args.from_config:
+        password = env_text("ADMIN_PASS")
+        if not password:
+            raise ValueError("配置中的 ADMIN_PASS 为空")
+    elif args.password_stdin:
+        password = sys.stdin.readline().rstrip("\r\n")
+        if not password:
+            raise ValueError("stdin 中没有管理员密码")
+    else:
+        if not sys.stdin.isatty():
+            raise ValueError(
+                "非交互重置必须使用 --from-config 或 --password-stdin"
+            )
+        password = getpass.getpass("新管理员密码: ")
+        confirmation = getpass.getpass("再次输入新密码: ")
+        if password != confirmation:
+            raise ValueError("两次输入的密码不一致")
+
+    action = _reset_admin_password(username, password)
+    verb = "已创建" if action == "created" else "密码已重置"
+    print(f"管理员{verb}: {username}")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="neu-box-webui",
@@ -115,7 +164,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        help="环境配置文件；默认使用 NEU_BOX_CONFIG 或 /etc/neu-box/webui.env",
+        help=(
+            "环境配置文件；默认使用 NEU_BOX_CONFIG 或 "
+            "项目 runtime/config/webui.env"
+        ),
     )
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -123,6 +175,27 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--listen", help="覆盖配置中的监听地址")
     serve.add_argument("--port", type=int, help="覆盖配置中的监听端口")
     add_database_commands(commands)
+    admin = commands.add_parser("admin", help="管理员账号恢复")
+    admin_commands = admin.add_subparsers(dest="admin_command", required=True)
+    reset = admin_commands.add_parser(
+        "reset-password",
+        help="显式创建管理员或重置管理员密码",
+    )
+    reset.add_argument(
+        "--username",
+        help="管理员用户名；默认读取 ADMIN_USER",
+    )
+    password_source = reset.add_mutually_exclusive_group()
+    password_source.add_argument(
+        "--from-config",
+        action="store_true",
+        help="从配置文件的 ADMIN_PASS 读取密码",
+    )
+    password_source.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="从 stdin 读取一行密码，避免出现在进程参数中",
+    )
     return parser
 
 
@@ -139,6 +212,10 @@ def main(argv: list[str] | None = None) -> int:
                 required_columns=REQUIRED_COLUMNS,
                 required_indexes=REQUIRED_INDEXES,
             )
+
+        if args.command == "admin":
+            configure_logging("master")
+            return _run_admin_command(args)
 
         configure_logging("master")
         app = create_app()

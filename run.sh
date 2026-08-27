@@ -3,8 +3,10 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 CALLER_DIR="$(pwd -P)"
-CONFIG_PATH="${NEU_BOX_WEBUI_CONFIG:-$SCRIPT_DIR/.env}"
+RUNTIME_DIR="$SCRIPT_DIR/runtime"
+CONFIG_PATH="${NEU_BOX_WEBUI_CONFIG:-$RUNTIME_DIR/config/webui.env}"
 PREPARE_ONLY=0
+RESET_ADMIN_PASSWORD=0
 SERVE_ARGS=()
 
 usage() {
@@ -14,8 +16,10 @@ usage() {
 同步锁定依赖、初始化配置和节点列表、迁移数据库，然后直接启动 WebUI。
 
 选项:
-  --config PATH   使用指定配置文件（默认: 项目根目录/.env）
+  --config PATH   使用指定配置文件（默认: runtime/config/webui.env）
   --prepare-only  只完成初始化和数据库迁移，不启动服务
+  --reset-admin-password
+                  生成并保存新的管理员密码，更新数据库后退出
   -h, --help      显示帮助
 
 示例:
@@ -37,6 +41,10 @@ while (($#)); do
             ;;
         --prepare-only)
             PREPARE_ONLY=1
+            shift
+            ;;
+        --reset-admin-password)
+            RESET_ADMIN_PASSWORD=1
             shift
             ;;
         -h|--help)
@@ -67,17 +75,22 @@ fi
 cd "$SCRIPT_DIR"
 unset VIRTUAL_ENV || true
 
+mkdir -p \
+    "$RUNTIME_DIR/config" \
+    "$RUNTIME_DIR/data/master/uploads" \
+    "$RUNTIME_DIR/data/master/experiment-logs" \
+    "$RUNTIME_DIR/data/backups" \
+    "$RUNTIME_DIR/logs"
+
 echo "[webui] 同步运行依赖"
 uv sync --frozen --no-dev
 PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
 
-CREATED_CONFIG=0
 GENERATED_ADMIN_PASS=""
 if [[ ! -e "$CONFIG_PATH" ]]; then
     mkdir -p "$(dirname -- "$CONFIG_PATH")"
     cp "$SCRIPT_DIR/deploy/config/master.env.example" "$CONFIG_PATH"
     chmod 600 "$CONFIG_PATH"
-    CREATED_CONFIG=1
     echo "[webui] 已创建配置: $CONFIG_PATH"
 elif [[ ! -f "$CONFIG_PATH" ]]; then
     echo "error: 配置路径不是普通文件: $CONFIG_PATH" >&2
@@ -89,7 +102,12 @@ replace_setting() {
     local value="$2"
     local temporary
     temporary="$(mktemp "${CONFIG_PATH}.tmp.XXXXXX")"
-    sed "s|^${key}=.*$|${key}=${value}|" "$CONFIG_PATH" >"$temporary"
+    if grep -q "^${key}=" "$CONFIG_PATH"; then
+        sed "s|^${key}=.*$|${key}=${value}|" "$CONFIG_PATH" >"$temporary"
+    else
+        cp "$CONFIG_PATH" "$temporary"
+        printf '\n%s=%s\n' "$key" "$value" >>"$temporary"
+    fi
     chmod 600 "$temporary"
     mv -f "$temporary" "$CONFIG_PATH"
 }
@@ -101,11 +119,10 @@ if grep -qx 'SECRET_KEY=' "$CONFIG_PATH"; then
     echo "[webui] 已生成并保存 SECRET_KEY"
 fi
 
-if ((CREATED_CONFIG)) && grep -qx 'ADMIN_PASS=admin' "$CONFIG_PATH"; then
-    GENERATED_ADMIN_PASS="$($PYTHON_BIN -c 'import secrets; print(secrets.token_urlsafe(18))')"
-    replace_setting ADMIN_PASS "$GENERATED_ADMIN_PASS"
+if grep -qx 'ADMIN_PASS=231415926@qq.com' "$CONFIG_PATH"; then
+    echo "[webui] 警告: 当前使用公开的默认管理员密码，请勿暴露到公网" >&2
 elif grep -qx 'ADMIN_PASS=admin' "$CONFIG_PATH"; then
-    echo "[webui] 警告: 当前 ADMIN_PASS 仍为默认值 admin，请立即修改" >&2
+    echo "[webui] 警告: 当前 ADMIN_PASS 仍为旧默认值 admin，请立即修改" >&2
 fi
 
 NODES_PATH="$($PYTHON_BIN - "$CONFIG_PATH" <<'PY'
@@ -131,10 +148,17 @@ echo "[webui] 执行数据库迁移"
 "$PYTHON_BIN" -m neu_box_webui.master.app \
     --config "$CONFIG_PATH" db migrate
 
-if [[ -n "$GENERATED_ADMIN_PASS" ]]; then
-    echo "[webui] 首次管理员账号: admin"
-    echo "[webui] 首次管理员密码: $GENERATED_ADMIN_PASS"
+if ((RESET_ADMIN_PASSWORD)); then
+    if [[ -z "$GENERATED_ADMIN_PASS" ]]; then
+        GENERATED_ADMIN_PASS="$($PYTHON_BIN -c 'import secrets; print(secrets.token_urlsafe(18))')"
+        replace_setting ADMIN_PASS "$GENERATED_ADMIN_PASS"
+    fi
+    printf '%s\n' "$GENERATED_ADMIN_PASS" | \
+        "$PYTHON_BIN" -m neu_box_webui.master.app \
+            --config "$CONFIG_PATH" admin reset-password --password-stdin
+    echo "[webui] 新管理员密码: $GENERATED_ADMIN_PASS"
     echo "[webui] 密码已写入 $CONFIG_PATH，请妥善保存"
+    exit 0
 fi
 
 if ((PREPARE_ONLY)); then

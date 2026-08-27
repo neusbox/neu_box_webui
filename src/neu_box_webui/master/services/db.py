@@ -315,6 +315,15 @@ class Database:
                 (user_id,)).fetchone()
             return dict(row) if row else None
 
+    def get_user_by_username(self, username: str) -> dict | None:
+        """通过用户名获取用户（不返回密码哈希）。"""
+        with self._conn() as conn:
+            row = conn.execute(
+                'SELECT id, username, role, created_at FROM users WHERE username=?',
+                (username,),
+            ).fetchone()
+            return dict(row) if row else None
+
     def list_users(self) -> list[dict]:
         """列出所有用户（不含密码哈希）。"""
         with self._conn() as conn:

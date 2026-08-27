@@ -26,11 +26,11 @@ def _write_config(cfg):
             os.fsync(f.fileno())
 
 
-# ── config.json 管理（必须注册在 /<node_id>/status 之前，否则 /config 会被当成 node_id） ──
+# ── nodes.json 管理（必须注册在 /<node_id>/status 之前，否则 /config 会被当成 node_id） ──
 
 @nodes_bp.route('/config', methods=['GET'])
 def get_config_nodes():
-    """返回 config.json 中的 nodes_pool 列表。"""
+    """返回 nodes.json 中的 nodes_pool 列表。"""
     cfg = _read_config()
     return {'nodes': cfg.get('nodes_pool', [])}, 200
 
@@ -38,7 +38,7 @@ def get_config_nodes():
 @nodes_bp.route('/config/add', methods=['POST'])
 @login_required
 def add_config_node():
-    """向 config.json 新增一个节点。"""
+    """向 nodes.json 新增一个节点。"""
     data = flask.request.get_json() or {}
     name = (data.get('name', '') or '').strip()
     host = (data.get('host', '') or '').strip()
@@ -72,7 +72,7 @@ def add_config_node():
 @nodes_bp.route('/config/remove', methods=['POST'])
 @login_required
 def remove_config_node():
-    """从 config.json 删除一个节点（按名称匹配）。"""
+    """从 nodes.json 删除一个节点（按名称匹配）。"""
     data = flask.request.get_json() or {}
     name = (data.get('name', '') or '').strip()
     if not name:

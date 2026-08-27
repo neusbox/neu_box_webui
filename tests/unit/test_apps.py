@@ -41,11 +41,45 @@ def test_master_app_health_and_packaged_static(tmp_path, monkeypatch):
     assert health.json["api_version"] == API_VERSION
     assert health.json["schema_version"] == 1
     assert client.get("/").status_code == 200
+    notice = client.get("/static/notice.txt")
+    assert notice.status_code == 200
+    assert b"admin" in notice.data
+    assert b"231415926@qq.com" in notice.data
+    assert b"/static/uploads/explanation.png" in notice.data
     rules = {(rule.rule, frozenset(rule.methods)) for rule in app.url_map.iter_rules()}
     assert any(path == '/tasks' and 'POST' in methods for path, methods in rules)
     assert any(path == '/tasks' and 'GET' in methods for path, methods in rules)
     assert any(path == '/tasks' and 'DELETE' in methods for path, methods in rules)
     assert not any(path.startswith('/command/') for path, _methods in rules)
+
+
+def test_admin_init_preserves_existing_password_and_explicit_reset_updates_it(
+    tmp_path,
+    monkeypatch,
+):
+    database_path = tmp_path / "master.db"
+    migrate_database(
+        database_path,
+        MASTER_MIGRATIONS,
+        MASTER_COLUMNS,
+        MASTER_INDEXES,
+    )
+    database = MasterDatabase(str(database_path))
+    user_id = database.create_user("admin", "old-password", role="admin")
+    monkeypatch.setattr(MasterDatabase, "_instance", database)
+    monkeypatch.setenv("ADMIN_USER", "admin")
+    monkeypatch.setenv("ADMIN_PASS", "new-password")
+
+    from neu_box_webui.master.app import _init_admin, _reset_admin_password
+
+    _init_admin()
+    assert database.verify_user("admin", "old-password")["id"] == user_id
+    assert database.verify_user("admin", "new-password") is None
+    assert len(database.list_users()) == 1
+
+    assert _reset_admin_password("admin", "new-password") == "updated"
+    assert database.verify_user("admin", "old-password") is None
+    assert database.verify_user("admin", "new-password")["id"] == user_id
 
 
 def test_node_apply_status_tracks_worker_api_version():

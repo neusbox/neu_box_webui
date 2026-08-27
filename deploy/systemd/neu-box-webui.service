@@ -8,8 +8,8 @@ Type=simple
 User=neu-box
 Group=neu-box
 WorkingDirectory=/opt/neu-box/webui
-EnvironmentFile=/etc/neu-box/webui.env
-ExecStart=/opt/neu-box/webui/.venv/bin/python -m neu_box_webui.master.app --config /etc/neu-box/webui.env serve
+EnvironmentFile=/opt/neu-box/webui/runtime/config/webui.env
+ExecStart=/opt/neu-box/webui/.venv/bin/python -m neu_box_webui.master.app --config /opt/neu-box/webui/runtime/config/webui.env serve
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30
@@ -18,7 +18,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/etc/neu-box/nodes.json /var/lib/neu-box/master /var/log/neu-box
+ReadWritePaths=/opt/neu-box/webui/runtime
 
 [Install]
 WantedBy=multi-user.target

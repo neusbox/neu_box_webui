@@ -78,11 +78,11 @@ class Nodes_Pool:
     # ── 初始化 & 同步 ──────────────────────────────────────────
 
     def _init_from_config(self):
-        """从 config.json 首次加载节点。"""
+        """从 nodes.json 首次加载节点。"""
         self._sync_nodes_from_config()
 
     def _read_config_file(self) -> list[dict]:
-        """读取 config.json 中 nodes_pool 数组，解析失败返回 []。"""
+        """读取 nodes.json 中 nodes_pool 数组，解析失败返回 []。"""
         import json
         try:
             with open(self._config_path) as f:
@@ -92,11 +92,11 @@ class Nodes_Pool:
             return []
 
     def sync_from_config(self):
-        """公开方法：主动从 config.json 同步节点（供 API 调用）。"""
+        """公开方法：主动从 nodes.json 同步节点（供 API 调用）。"""
         self._sync_nodes_from_config()
 
     def _sync_nodes_from_config(self):
-        """从 config.json 同步节点：按 name 去重，已存在的保留 node_id，不存在的删除。"""
+        """从 nodes.json 同步节点：按 name 去重，已存在的保留 node_id，不存在的删除。"""
         nodes_cfg = self._read_config_file()
 
         # 按 name 建索引，方便查找
@@ -236,7 +236,7 @@ class Nodes_Pool:
             time.sleep(sleep_time)
 
     def _poll_all_nodes(self):
-        """向所有节点请求 /status 并更新本地记录。每次先同步 config.json 中的节点列表。"""
+        """向所有节点请求 /status 并更新本地记录。每次先同步 nodes.json 中的节点列表。"""
         self._sync_nodes_from_config()
         for node_id, node in list(self.nodes.items()):
             try:

@@ -1,11 +1,13 @@
-# 欢迎使用 neu_box（alpha 0.1）
+# 欢迎使用 Neu Box
 
-> *用户名：admin*
+> 默认管理员用户名：`admin`
+>
+> 默认管理员密码：`231415926@qq.com`
 
-> *密码：231415926@qq.com*
+⚠️ 当前用户系统尚未经过严格的安全测试，请仅在可信网络或测试环境中使用，不要直接暴露到公网。
 
-+ 使用说明
+## 使用说明
 
 ![使用说明](/static/uploads/explanation.png)
 
-如有问题请联系管理员 彭玉涛：YutaoPeng@foxmail.com。
+任务提交、终端沙盒和 Worker API 的完整说明请查看项目文档。
