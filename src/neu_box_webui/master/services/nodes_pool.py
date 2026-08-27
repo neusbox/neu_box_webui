@@ -254,14 +254,16 @@ class Nodes_Pool:
     # ── 通用转发 ────────────────────────────────────────────────
 
     def forward_to_node(self, node_id: str, endpoint: str,
-                        req: dict, timeout: int = 30) -> requests.Response:
+                        req: dict, timeout: int = 30,
+                        method: str = 'POST') -> requests.Response:
         """向指定 worker 节点转发请求。
 
         Args:
             node_id:  目标节点 UUID
-            endpoint: Worker 上的路径，如 '/command/run'
+            endpoint: Worker 上的路径，如 '/tasks'
             req:      JSON 请求体
             timeout:  HTTP 超时秒数
+            method:   HTTP 方法（POST 或 DELETE）
 
         Returns:
             requests.Response 对象
@@ -270,12 +272,16 @@ class Nodes_Pool:
         if not node:
             raise ValueError(f'节点 {node_id} 不存在')
         try:
-            resp = requests.post(
+            resp = requests.request(
+                method,
                 f'http://{node.ip}:{node.port}{endpoint}',
                 json=req,
                 timeout=timeout,
             )
-            logger.debug('转发 → %s %s 状态 %s', node_id, endpoint, resp.status_code)
+            logger.debug(
+                '%s → %s %s 状态 %s',
+                method, node_id, endpoint, resp.status_code,
+            )
             if not resp.ok and resp.text and resp.text.strip().startswith('<!'):
                 raise ValueError(f'Worker 返回错误: {resp.text[:200]}')
             return resp
@@ -288,7 +294,7 @@ class Nodes_Pool:
 
         Args:
             node_id:  目标节点 UUID
-            endpoint: Worker 上的路径，如 '/command/queue'
+            endpoint: Worker 上的路径，如 '/tasks'
             params:   URL 查询参数
             timeout:  HTTP 超时秒数
 

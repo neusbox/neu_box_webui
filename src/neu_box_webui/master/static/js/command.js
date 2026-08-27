@@ -210,7 +210,7 @@ async function rerunTask(taskId) {
   };
 
   try {
-    const resp = await fetch('/command/run', {
+    const resp = await fetch('/tasks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -262,8 +262,8 @@ document.getElementById('queueBatchDeleteBtn').addEventListener('click', async (
   if (!confirm(`确定删除 ${ids.length} 个任务吗？（运行中的任务将被强制终止）`)) return;
 
   try {
-    const resp = await fetch('/command/tasks/delete', {
-      method: 'POST',
+    const resp = await fetch('/tasks', {
+      method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ node_id: state.selectedNodeId, task_ids: ids }),
     });
@@ -295,7 +295,7 @@ async function fetchQueue() {
   }
 
   try {
-    const resp = await fetch(`/command/queue?node_id=${encodeURIComponent(state.selectedNodeId)}`);
+    const resp = await fetch(`/tasks?node_id=${encodeURIComponent(state.selectedNodeId)}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     _lastQueueData = data;
@@ -402,7 +402,7 @@ async function viewTaskLog(taskId) {
   try {
     // 1. 取元数据
     const metaResp = await fetch(
-      `/command/result/${taskId}?node_id=${encodeURIComponent(state.selectedNodeId)}`);
+      `/tasks/${taskId}?node_id=${encodeURIComponent(state.selectedNodeId)}`);
     if (!metaResp.ok) throw new Error(`HTTP ${metaResp.status}`);
     const task = await metaResp.json();
 
@@ -436,7 +436,7 @@ async function viewTaskLog(taskId) {
     const logText = await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('GET',
-        `/command/result/${taskId}/log?node_id=${encodeURIComponent(state.selectedNodeId)}&raw=1`);
+        `/tasks/${taskId}/log?node_id=${encodeURIComponent(state.selectedNodeId)}&raw=1`);
       xhr.responseType = 'text';
 
       let totalEst = 0;
@@ -562,7 +562,7 @@ async function submitCommand() {
   };
 
   try {
-    const resp = await fetch('/command/run', {
+    const resp = await fetch('/tasks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -638,7 +638,7 @@ batchBtn.addEventListener('click', async () => {
       target,
     };
     try {
-      const resp = await fetch('/command/run', {
+      const resp = await fetch('/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

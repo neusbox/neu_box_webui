@@ -5,6 +5,6 @@
 与 neu_box 仓库的副本同源但各自独立维护。
 """
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"
 
-API_VERSION = 1
+API_VERSION = 2

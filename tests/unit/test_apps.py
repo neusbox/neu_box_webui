@@ -33,13 +33,19 @@ def test_master_app_health_and_packaged_static(tmp_path, monkeypatch):
 
     from neu_box_webui.master.app import create_app
 
-    client = create_app().test_client()
+    app = create_app()
+    client = app.test_client()
     health = client.get("/healthz")
     assert health.status_code == 200
     assert health.json["role"] == "master"
     assert health.json["api_version"] == API_VERSION
     assert health.json["schema_version"] == 1
     assert client.get("/").status_code == 200
+    rules = {(rule.rule, frozenset(rule.methods)) for rule in app.url_map.iter_rules()}
+    assert any(path == '/tasks' and 'POST' in methods for path, methods in rules)
+    assert any(path == '/tasks' and 'GET' in methods for path, methods in rules)
+    assert any(path == '/tasks' and 'DELETE' in methods for path, methods in rules)
+    assert not any(path.startswith('/command/') for path, _methods in rules)
 
 
 def test_node_apply_status_tracks_worker_api_version():

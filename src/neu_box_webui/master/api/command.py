@@ -8,9 +8,9 @@ from neu_box_webui.master.api.auth import login_required
 command_bp = Blueprint('command', __name__)
 
 
-@command_bp.route('/run', methods=['POST'])
+@command_bp.route('', methods=['POST'])
 @login_required
-def run():
+def create_task():
     """提交命令到指定 Worker 的任务队列。"""
     data = request.get_json(silent=True) or {}
 
@@ -43,13 +43,13 @@ def run():
     }
 
     try:
-        resp = Nodes_Pool.get_nodes_pool().forward_to_node(node_id, '/command/run', req)
+        resp = Nodes_Pool.get_nodes_pool().forward_to_node(node_id, '/tasks', req)
         return resp.json(), resp.status_code
     except ValueError as e:
         return {'error': f'{e}。请检查是否选择了正确的节点'}, 404
 
 
-@command_bp.route('/tasks/delete', methods=['POST'])
+@command_bp.route('', methods=['DELETE'])
 @login_required
 def delete_tasks():
     """批量删除任务，转发到指定 Worker。
@@ -67,15 +67,15 @@ def delete_tasks():
 
     try:
         resp = Nodes_Pool.get_nodes_pool().forward_to_node(
-            node_id, '/command/tasks/delete', {'task_ids': task_ids})
+            node_id, '/tasks', {'task_ids': task_ids}, method='DELETE')
         return resp.json(), resp.status_code
     except ValueError as e:
         return {'error': f'{e}。请检查是否选择了正确的节点'}, 404
 
 
-@command_bp.route('/queue', methods=['GET'])
+@command_bp.route('', methods=['GET'])
 @login_required
-def queue():
+def list_tasks():
     """查看指定 Worker 上的任务队列。
 
     Query: ?node_id=xxx
@@ -85,15 +85,15 @@ def queue():
         return {'error': 'node_id 参数必填'}, 400
 
     try:
-        resp = Nodes_Pool.get_nodes_pool().forward_get_to_node(node_id, '/command/queue')
+        resp = Nodes_Pool.get_nodes_pool().forward_get_to_node(node_id, '/tasks')
         return resp.json(), resp.status_code
     except ValueError as e:
         return {'error': f'{e}。请检查是否选择了正确的节点'}, 404
 
 
-@command_bp.route('/result/<task_id>', methods=['GET'])
+@command_bp.route('/<task_id>', methods=['GET'])
 @login_required
-def result(task_id: str):
+def get_task(task_id: str):
     """查看任务结果元数据（状态、返回码等）。
 
     Query: ?node_id=xxx
@@ -104,19 +104,19 @@ def result(task_id: str):
 
     try:
         resp = Nodes_Pool.get_nodes_pool().forward_get_to_node(
-            node_id, f'/command/result/{task_id}')
+            node_id, f'/tasks/{task_id}')
         return resp.json(), resp.status_code
     except ValueError as e:
         return {'error': f'{e}。请检查是否选择了正确的节点'}, 404
 
 
-@command_bp.route('/result/<task_id>/log', methods=['GET'])
+@command_bp.route('/<task_id>/log', methods=['GET'])
 @login_required
-def result_log(task_id: str):
+def get_task_log(task_id: str):
     """获取任务日志文件内容（分块）。
 
     Query: ?node_id=xxx&tail=N 或 &offset=N&limit=M
-    代理到 worker 的 /command/result/<id>/log
+    代理到 worker 的 /tasks/<id>/log
     """
     node_id = (request.args.get('node_id') or '').strip()
     if not node_id:
@@ -130,7 +130,7 @@ def result_log(task_id: str):
 
     try:
         resp = Nodes_Pool.get_nodes_pool().forward_get_to_node(
-            node_id, f'/command/result/{task_id}/log', params=params or None)
+            node_id, f'/tasks/{task_id}/log', params=params or None)
         # raw 模式 → 透明转发纯文本，不解析 JSON
         if request.args.get('raw'):
             return resp.text, resp.status_code, {'Content-Type': resp.headers.get('Content-Type', 'text/plain')}

@@ -64,7 +64,7 @@ def create_app() -> flask.Flask:
     from neu_box_webui.master.api.nodes import nodes_bp
 
     app.register_blueprint(auth_bp, url_prefix="/auth")
-    app.register_blueprint(command_bp, url_prefix="/command")
+    app.register_blueprint(command_bp, url_prefix="/tasks")
     app.register_blueprint(nodes_bp, url_prefix="/nodes")
     app.register_blueprint(experiment_bp, url_prefix="/experiments")
 

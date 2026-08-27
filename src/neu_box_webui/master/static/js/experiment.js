@@ -242,7 +242,7 @@ async function _loadTaskLog(taskId, nodeId) {
   if (nodeId) {
     try {
       const r = await fetch(
-        `/command/result/${taskId}/log?node_id=${encodeURIComponent(nodeId)}&raw=1`);
+        `/tasks/${taskId}/log?node_id=${encodeURIComponent(nodeId)}&raw=1`);
       if (r.ok) return await r.text();
     } catch {}
   }
@@ -583,7 +583,7 @@ function showTaskPicker(pos, expData) {
         node_id: nodeId,
         user_id: state.cmdUserId,
       });
-      const r = await fetch(`/command/result/${taskId}?${params}`);
+      const r = await fetch(`/tasks/${taskId}?${params}`);
       const task = await r.json();
       if (!r.ok) {
         resultEl.innerHTML = `<span style="color:#ff5f57">HTTP ${r.status}</span>`;
@@ -972,7 +972,7 @@ async function saveExperiment() {
     // 从 worker 拉日志副本，存到 master 缓存
     try {
       const logResp = await fetch(
-        `/command/result/${tid}/log?node_id=${encodeURIComponent(nid)}&raw=1`);
+        `/tasks/${tid}/log?node_id=${encodeURIComponent(nid)}&raw=1`);
       if (logResp.ok) logs[tid] = await logResp.text();
     } catch {}
   }

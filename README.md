@@ -8,21 +8,21 @@ Neu Box 的中心节点：节点池管理、任务转发、实验记录、Web �
 | 仓库 | 角色 | 版本 |
 |---|---|---|
 | [neu_box](https://github.com/neusbox/neu_box) | worker（节点侧设备沙盒）+ 聚合（e2e 测试、submodule 兼容矩阵） | 0.3.0+ |
-| **neu_box_webui**（本仓库） | WebUI / master | 0.0.1+ |
-| [neu_box_goClient](https://github.com/neusbox/neu_box_goClient) | Go 客户端 `neu-sbox`（直连 worker） | 0.0.1+ |
+| **neu_box_webui**（本仓库） | WebUI / master | 0.1.0+ |
+| [neu_box_goClient](https://github.com/neusbox/neu_box_goClient) | Go 客户端 `neu-sbox`（直连 worker） | 0.2.0+ |
 
 三者只通过 HTTP 契约相交，代码零依赖（共享的 `config` / `logging_config` /
 `database` 迁移引擎为本仓库自有副本，与 neu_box 仓库同源、独立演进）。
 
 ## 与 worker 的兼容
 
-- 本仓库 `API_VERSION = 1`（`src/neu_box_webui/__init__.py`）
+- 本仓库 `API_VERSION = 2`（`src/neu_box_webui/__init__.py`）
 - 心跳时读取 worker `/status` 的 `api_version`，低于本仓库要求时打 WARNING
 - 兼容矩阵：
 
 | WebUI | 最低 worker |
 |---|---|
-| 0.0.1 | 0.3.0（首个上报 `api_version` 的版本） |
+| 0.1.0 | 0.4.0（`/tasks`，`api_version = 2`） |
 
 API 契约：[docs/master-api.md](docs/master-api.md)；
 worker 侧契约见 neu_box 仓库 `docs/worker-api.md`。

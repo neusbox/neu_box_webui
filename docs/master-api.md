@@ -11,7 +11,7 @@ WebUI 对**浏览器前端**暴露的 HTTP 接口（`js/app.js`、`js/command.js
 **认证**：除 `/auth/login`、`/auth/me`、`/healthz`、静态资源外，所有接口要求
 session 登录（cookie）。
 
-**API 版本**：`/healthz` 返回 `api_version`（当前 `1`）。
+**API 版本**：`/healthz` 返回 `api_version`（当前 `2`）。
 仅破坏性变更（删字段、改语义）时 +1；新增字段/端点不升版本。
 
 ## 认证
@@ -40,13 +40,13 @@ session 登录（cookie）。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/command/run` | 提交任务到指定节点队列，返回 202 + task_id（批量 = 前端多次调用） |
-| GET | `/command/queue?node_id=` | 队列快照 |
-| POST | `/command/tasks/delete` | 删除/终止任务（排队/运行） |
-| GET | `/command/result/<task_id>` | 任务结果（可带 follow 参数） |
-| GET | `/command/result/<task_id>/log` | 任务日志 |
+| POST | `/tasks` | 提交任务到指定节点队列，返回 202 + task_id（批量 = 前端多次调用） |
+| GET | `/tasks?node_id=` | 队列快照 |
+| DELETE | `/tasks` | 删除/终止任务（排队/运行） |
+| GET | `/tasks/<task_id>` | 任务结果 |
+| GET | `/tasks/<task_id>/log` | 任务日志 |
 
-`/command/run` 请求体字段见 `neu_box` 仓库 `docs/worker-api.md`
+`POST /tasks` 请求体字段见 `neu_box` 仓库 `docs/worker-api.md`
 （WebUI 原样转发到目标 worker；`priority` 0=普通 1=赶论文）。
 
 ## 实验记录
@@ -67,8 +67,8 @@ session 登录（cookie）。
 `GET /healthz`：
 
 ```json
-{"status":"ok","role":"master","api_version":1,
- "version":"0.0.1","schema_version":1}
+{"status":"ok","role":"master","api_version":2,
+ "version":"0.1.0","schema_version":1}
 ```
 
 ## 与 worker 的兼容
@@ -79,7 +79,7 @@ WebUI 心跳时读取 worker `/status` 的 `api_version` 并记录；
 
 | WebUI | 最低 worker |
 |---|---|
-| 0.0.1 | 0.3.0（首个上报 api_version 的版本） |
+| 0.1.0 | 0.4.0（`/tasks`，`api_version = 2`） |
 
 Go 客户端（neu_box_goClient）与 WebUI 无运行时依赖，它只依赖 worker API；
 其兼容矩阵见 neu_box_goClient 仓库 README。
