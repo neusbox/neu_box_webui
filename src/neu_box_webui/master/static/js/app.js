@@ -247,6 +247,9 @@ function progressClass(percent) {
 function renderNodeCard(node) {
   const isSelected = node.node_id === state.selectedNodeId;
   const isOnline  = node.status === 'online';
+  const offlineReason = node.status_error
+    ? escapeHtml(node.status_error)
+    : '无法连接 Worker /status';
   const cpuPct     = cpuUsedPercent(node.idle_cpu, node.total_cpu);
   const memUsed    = node.total_mem - node.idle_mem;
   const memPct     = node.total_mem > 0 ? (memUsed / node.total_mem) * 100 : 0;
@@ -260,7 +263,7 @@ function renderNodeCard(node) {
       <div class="node-card-header">
         <span class="node-card-addr">${node.name}</span>
         <span class="node-status-dot ${isOnline ? 'online' : 'offline'}"
-              title="${isOnline ? '在线' : '离线'}"></span>
+              title="${isOnline ? '在线' : offlineReason}"></span>
       </div>
       ${isOnline ? `
       <div class="node-resources">
@@ -289,7 +292,10 @@ function renderNodeCard(node) {
       </div>
       ` : `
       <div class="node-resources">
-        <span style="font-size:10px;color:var(--sub)">节点离线</span>
+        <span style="font-size:10px;color:var(--sub);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+              title="${offlineReason}">
+          节点离线：${offlineReason}
+        </span>
       </div>
       `}
     </div>`;

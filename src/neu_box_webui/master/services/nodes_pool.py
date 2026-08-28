@@ -23,6 +23,7 @@ class Nodes:
 
         # ── 动态状态（由心跳或主动查询更新） ──
         self.status = 'offline'          # online | offline
+        self.status_error = ''           # 最近一次状态查询错误
         self.total_cpu = 0
         self.idle_cpu = 0
         self.total_mem = 0               # bytes
@@ -60,19 +61,34 @@ class Nodes_Pool:
     """节点池（单例）—— 管理所有 worker 节点"""
 
     _instance = None
+    _instance_lock = threading.Lock()
 
     def __init__(self):
         self.nodes: dict[str, Nodes] = {}    # node_id → Nodes
         self._config_path = str(nodes_config_path())
+        self._nodes_lock = threading.RLock()
+        self._sync_lock = threading.Lock()
+        self._http_local = threading.local()
+
+    def _get_http_session(self) -> requests.Session:
+        """每个线程复用独立 Session，节点控制面请求不继承系统代理。"""
+        session = getattr(self._http_local, 'session', None)
+        if session is None:
+            session = requests.Session()
+            session.trust_env = False
+            self._http_local.session = session
+        return session
+
+    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+        return self._get_http_session().request(method, url, **kwargs)
 
     @classmethod
     def get_nodes_pool(cls) -> 'Nodes_Pool':
-        if cls._instance is None:
-            obj = object.__new__(cls)
-            obj.nodes = {}
-            obj._config_path = str(nodes_config_path())
-            obj._init_from_config()
-            cls._instance = obj
+        with cls._instance_lock:
+            if cls._instance is None:
+                obj = cls()
+                obj._init_from_config()
+                cls._instance = obj
         return cls._instance
 
     # ── 初始化 & 同步 ──────────────────────────────────────────
@@ -81,15 +97,21 @@ class Nodes_Pool:
         """从 nodes.json 首次加载节点。"""
         self._sync_nodes_from_config()
 
-    def _read_config_file(self) -> list[dict]:
-        """读取 nodes.json 中 nodes_pool 数组，解析失败返回 []。"""
+    def _read_config_file(self) -> list[dict] | None:
+        """读取 nodes.json 中 nodes_pool 数组；读取失败时保留现有节点。"""
         import json
         try:
             with open(self._config_path) as f:
                 cfg = json.load(f)
-            return cfg.get('nodes_pool', [])
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return []
+            if not isinstance(cfg, dict):
+                raise ValueError('节点配置根对象必须是 JSON 对象')
+            nodes = cfg.get('nodes_pool', [])
+            if not isinstance(nodes, list):
+                raise ValueError('nodes_pool 必须是数组')
+            return nodes
+        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError) as exc:
+            logger.error('读取节点配置失败，保留现有节点: %s', exc)
+            return None
 
     def sync_from_config(self):
         """公开方法：主动从 nodes.json 同步节点（供 API 调用）。"""
@@ -97,53 +119,68 @@ class Nodes_Pool:
 
     def _sync_nodes_from_config(self):
         """从 nodes.json 同步节点：按 name 去重，已存在的保留 node_id，不存在的删除。"""
-        nodes_cfg = self._read_config_file()
+        # 覆盖“旧配置先读、新配置先应用、旧配置后覆盖”的乱序同步。
+        with self._sync_lock:
+            nodes_cfg = self._read_config_file()
+            if nodes_cfg is None:
+                return
 
-        # 按 name 建索引，方便查找
-        old_by_name: dict[str, Nodes] = {}
-        for node in self.nodes.values():
-            if node.name:
-                old_by_name[node.name] = node
+            with self._nodes_lock:
+                # 按 name 建索引，方便查找
+                old_by_name: dict[str, Nodes] = {}
+                for node in self.nodes.values():
+                    if node.name:
+                        old_by_name[node.name] = node
 
-        new_nodes: dict[str, Nodes] = {}
-        for entry in nodes_cfg:
-            host = entry.get('host', '').strip()
-            port = entry.get('port', 5000)
-            name = entry.get('name', '').strip()
-            if not host or not name:
-                continue
+                new_nodes: dict[str, Nodes] = {}
+                for entry in nodes_cfg:
+                    if not isinstance(entry, dict):
+                        continue
+                    host = str(entry.get('host') or '').strip()
+                    port = entry.get('port', 5000)
+                    name = str(entry.get('name') or '').strip()
+                    if not host or not name:
+                        continue
 
-            existing = old_by_name.get(name)
-            if existing:
-                existing.ip = host
-                existing.port = port
-                new_nodes[existing.node_id] = existing
-            else:
-                node_id = str(uuid.uuid4())
-                node = Nodes(node_id, name, host, port)
-                new_nodes[node_id] = node
-                logger.info('新增节点 %s (%s @ %s:%s)', node_id, name, host, port)
+                    existing = old_by_name.get(name)
+                    if existing:
+                        existing.ip = host
+                        existing.port = port
+                        new_nodes[existing.node_id] = existing
+                    else:
+                        node_id = str(uuid.uuid4())
+                        node = Nodes(node_id, name, host, port)
+                        new_nodes[node_id] = node
+                        logger.info(
+                            '新增节点 %s (%s @ %s:%s)',
+                            node_id, name, host, port,
+                        )
 
-        # 移除不再存在于 config 中的节点
-        for node_id in list(self.nodes.keys()):
-            if node_id not in new_nodes:
-                logger.info('移除节点 %s', node_id)
-        self.nodes = new_nodes
+                # 移除不再存在于 config 中的节点
+                for node_id in list(self.nodes.keys()):
+                    if node_id not in new_nodes:
+                        logger.info('移除节点 %s', node_id)
+                self.nodes = new_nodes
 
     # ── CRUD ───────────────────────────────────────────────────
 
     def add_node(self, node: Nodes):
-        self.nodes[node.node_id] = node
+        with self._nodes_lock:
+            self.nodes[node.node_id] = node
 
     def remove_node(self, node_id: str):
-        self.nodes.pop(node_id, None)
+        with self._nodes_lock:
+            self.nodes.pop(node_id, None)
 
     def get_node_by_id(self, node_id: str) -> Nodes | None:
-        return self.nodes.get(node_id)
+        with self._nodes_lock:
+            return self.nodes.get(node_id)
 
     def get_node_by_host_port(self, host: str, port: int) -> Nodes | None:
         """按 host + 端口查找节点，用于去重。"""
-        for node in self.nodes.values():
+        with self._nodes_lock:
+            nodes = list(self.nodes.values())
+        for node in nodes:
             if node.ip == host and node.port == port:
                 return node
         return None
@@ -153,13 +190,16 @@ class Nodes_Pool:
     def get_all_nodes(self) -> list[dict]:
         """返回所有节点摘要，供前端选择器使用"""
         result = []
-        for node in self.nodes.values():
+        with self._nodes_lock:
+            nodes = list(self.nodes.values())
+        for node in nodes:
             result.append({
                 'node_id': node.node_id,
                 'name': node.name,
                 'ip': node.ip,
                 'port': node.port,
                 'status': node.status,
+                'status_error': node.status_error,
                 'total_cpu': node.total_cpu,
                 'idle_cpu': node.idle_cpu,
                 'total_mem': node.total_mem,
@@ -179,25 +219,43 @@ class Nodes_Pool:
         if not node:
             raise ValueError(f'节点 {node_id} 不存在')
 
+        return self._query_node_status(node)
+
+    def _query_node_status(self, node: Nodes) -> dict:
+        """查询稳定的节点对象快照；节点池并发同步时不会重新按 ID 查找。"""
         try:
-            resp = requests.get(
+            resp = self._request(
+                'GET',
                 f'http://{node.ip}:{node.port}/status',
                 timeout=5,
             )
             resp.raise_for_status()
             data = resp.json()
+            was_offline = node.status != 'online'
             node.apply_status(data)
+            if was_offline:
+                logger.info('节点恢复在线: %s (%s:%s)', node.name, node.ip, node.port)
             node.status = 'online'
+            node.status_error = ''
             return data
         except requests.RequestException as e:
             node.status = 'offline'
-            return {'error': '无法连接到节点', 'details': str(e)}
+            details = str(e)
+            if node.status_error != details:
+                logger.warning(
+                    '节点离线: %s (%s:%s): %s',
+                    node.name, node.ip, node.port, details,
+                )
+            node.status_error = details
+            return {'error': '无法连接到节点', 'details': details}
 
     def query_all_nodes_status(self) -> dict[str, dict]:
         """批量查询所有节点状态"""
         results = {}
-        for node_id in self.nodes:
-            results[node_id] = self.query_node_status(node_id)
+        with self._nodes_lock:
+            nodes = list(self.nodes.items())
+        for node_id, node in nodes:
+            results[node_id] = self._query_node_status(node)
         return results
 
     # ── 定期轮询 ───────────────────────────────────────────────
@@ -238,18 +296,10 @@ class Nodes_Pool:
     def _poll_all_nodes(self):
         """向所有节点请求 /status 并更新本地记录。每次先同步 nodes.json 中的节点列表。"""
         self._sync_nodes_from_config()
-        for node_id, node in list(self.nodes.items()):
-            try:
-                resp = requests.get(
-                    f'http://{node.ip}:{node.port}/status',
-                    timeout=5,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                node.apply_status(data)
-                node.status = 'online'
-            except requests.RequestException:
-                node.status = 'offline'
+        with self._nodes_lock:
+            nodes = list(self.nodes.values())
+        for node in nodes:
+            self._query_node_status(node)
 
     # ── 通用转发 ────────────────────────────────────────────────
 
@@ -272,7 +322,7 @@ class Nodes_Pool:
         if not node:
             raise ValueError(f'节点 {node_id} 不存在')
         try:
-            resp = requests.request(
+            resp = self._request(
                 method,
                 f'http://{node.ip}:{node.port}{endpoint}',
                 json=req,
@@ -305,7 +355,8 @@ class Nodes_Pool:
         if not node:
             raise ValueError(f'节点 {node_id} 不存在')
         try:
-            resp = requests.get(
+            resp = self._request(
+                'GET',
                 f'http://{node.ip}:{node.port}{endpoint}',
                 params=params,
                 timeout=timeout,

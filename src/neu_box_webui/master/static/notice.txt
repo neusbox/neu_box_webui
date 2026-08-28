@@ -8,6 +8,6 @@
 
 ## 使用说明
 
-![使用说明](/static/uploads/explanation.png)
+![使用说明](/static/explanation.png)
 
 任务提交、终端沙盒和 Worker API 的完整说明请查看项目文档。

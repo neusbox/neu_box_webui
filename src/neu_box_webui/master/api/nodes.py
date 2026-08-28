@@ -1,6 +1,8 @@
 import json
 import os
+import tempfile
 import threading
+from pathlib import Path
 
 import flask
 from neu_box_webui.master.services.nodes_pool import Nodes_Pool
@@ -13,17 +15,41 @@ CONFIG_PATH = str(nodes_config_path())
 _config_lock = threading.Lock()
 
 
-def _read_config():
+def _read_config_unlocked():
     with open(CONFIG_PATH) as f:
         return json.load(f)
 
 
-def _write_config(cfg):
+def _read_config():
     with _config_lock:
-        with open(CONFIG_PATH, 'w') as f:
+        return _read_config_unlocked()
+
+
+def _write_config_unlocked(cfg):
+    """在同目录完整落盘后原子替换，避免轮询线程读到半份 JSON。"""
+    target = Path(CONFIG_PATH)
+    fd, temporary = tempfile.mkstemp(
+        dir=target.parent,
+        prefix=f'.{target.name}.',
+        suffix='.tmp',
+    )
+    try:
+        with os.fdopen(fd, 'w') as f:
             json.dump(cfg, f, indent=4, ensure_ascii=False)
+            f.write('\n')
             f.flush()
             os.fsync(f.fileno())
+        os.replace(temporary, target)
+        directory_fd = os.open(target.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 
 # ── nodes.json 管理（必须注册在 /<node_id>/status 之前，否则 /config 会被当成 node_id） ──
@@ -54,15 +80,16 @@ def add_config_node():
     if errors:
         return {'error': '; '.join(errors)}, 400
 
-    cfg = _read_config()
-    nodes = cfg.setdefault('nodes_pool', [])
+    with _config_lock:
+        cfg = _read_config_unlocked()
+        nodes = cfg.setdefault('nodes_pool', [])
 
-    # 检查名称是否重复
-    if any(n.get('name') == name for n in nodes):
-        return {'error': f"节点名称 '{name}' 已存在"}, 409
+        # 检查名称是否重复
+        if any(n.get('name') == name for n in nodes):
+            return {'error': f"节点名称 '{name}' 已存在"}, 409
 
-    nodes.append({'name': name, 'host': host, 'port': port})
-    _write_config(cfg)
+        nodes.append({'name': name, 'host': host, 'port': port})
+        _write_config_unlocked(cfg)
 
     # 通知 Nodes_Pool 立即同步
     Nodes_Pool.get_nodes_pool().sync_from_config()
@@ -78,15 +105,16 @@ def remove_config_node():
     if not name:
         return {'error': '节点名称不能为空'}, 400
 
-    cfg = _read_config()
-    nodes = cfg.get('nodes_pool', [])
-    before = len(nodes)
-    cfg['nodes_pool'] = [n for n in nodes if n.get('name') != name]
+    with _config_lock:
+        cfg = _read_config_unlocked()
+        nodes = cfg.get('nodes_pool', [])
+        before = len(nodes)
+        cfg['nodes_pool'] = [n for n in nodes if n.get('name') != name]
 
-    if len(cfg['nodes_pool']) == before:
-        return {'error': f"节点 '{name}' 不存在"}, 404
+        if len(cfg['nodes_pool']) == before:
+            return {'error': f"节点 '{name}' 不存在"}, 404
 
-    _write_config(cfg)
+        _write_config_unlocked(cfg)
 
     # 通知 Nodes_Pool 立即同步
     Nodes_Pool.get_nodes_pool().sync_from_config()
