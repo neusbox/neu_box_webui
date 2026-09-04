@@ -17,16 +17,32 @@ from flask import Blueprint, request, session
 from neu_box_webui.master.services.db import Database
 
 auth_bp = Blueprint('auth', __name__)
-db = Database.get_instance()
 logger = logging.getLogger('master.auth')
 
 
+def __getattr__(name: str):
+    """延迟获取 Database 单例，避免导入期绑定导致测试/迁移后拿到旧实例。"""
+    if name == 'db':
+        return Database.get_instance()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+def _db() -> "Database":
+    """每次调用取当前单例（延迟绑定，便于测试替换/迁移）。"""
+    return Database.get_instance()
+
+
+
 def login_required(f):
-    """装饰器：要求已登录，否则返回 401。"""
+    """装饰器：要求已登录且账号启用，否则返回 401。"""
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
-        if not session.get('user_id'):
+        uid = session.get('user_id')
+        if not uid:
             return {'error': '请先登录'}, 401
+        user = _db().get_user(uid)
+        if not user or not user.get('is_active', 1):
+            session.pop('user_id', None)
+            return {'error': '请先登录（账号可能已被禁用）'}, 401
         return f(*args, **kwargs)
     return wrapper
 
@@ -36,7 +52,7 @@ def get_current_user() -> dict | None:
     uid = session.get('user_id')
     if not uid:
         return None
-    return db.get_user(uid)
+    return _db().get_user(uid)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -58,13 +74,17 @@ def login():
     if not username or not password:
         return {'error': '用户名和密码不能为空'}, 400
 
-    user = db.verify_user(username, password)
+    user = _db().verify_user(username, password)
     if not user:
         logger.warning('登录失败: %s', username)
         return {'error': '用户名或密码错误'}, 401
+    if not user.get('is_active', 1):
+        logger.warning('已禁用账号尝试登录: %s', username)
+        return {'error': '账号已被禁用，请联系管理员'}, 403
 
     session.permanent = True
     session['user_id'] = user['id']
+    _db().update_last_login(user['id'])
     logger.info('用户登录: %s (%s)', username, user['role'])
 
     return {
@@ -123,11 +143,11 @@ def change_password():
         return {'error': '登录已过期'}, 401
 
     # 验证旧密码
-    verified = db.verify_user(user['username'], old_password)
+    verified = _db().verify_user(user['username'], old_password)
     if not verified:
         return {'error': '旧密码不正确'}, 403
 
-    db.update_password(user['id'], new_password)
+    _db().update_password(user['id'], new_password)
     logger.info('用户 %s 修改了密码', user['username'])
     return {'message': '密码已修改，请重新登录'}, 200
 
@@ -144,7 +164,7 @@ def list_credentials():
     返回: { "credentials": [{"node_name":"...","username":"..."}, ...] }
     """
     user_id = session['user_id']
-    creds = db.get_credentials(user_id)
+    creds = _db().get_credentials(user_id)
     return {'credentials': creds}, 200
 
 
@@ -168,7 +188,7 @@ def save_credential():
         return {'error': '; '.join(errors)}, 400
 
     user_id = session['user_id']
-    db.save_credential(user_id, node_name, username)
+    _db().save_credential(user_id, node_name, username)
     logger.info('用户 %s 保存节点凭据: %s → %s', user_id, node_name, username)
     return {'message': f'节点 "{node_name}" 凭据已保存'}, 200
 
@@ -178,7 +198,7 @@ def save_credential():
 def delete_credential(node_name: str):
     """删除一条节点凭据。"""
     user_id = session['user_id']
-    ok = db.delete_credential(user_id, node_name)
+    ok = _db().delete_credential(user_id, node_name)
     if not ok:
         return {'error': '凭据不存在'}, 404
     logger.info('用户 %s 删除节点凭据: %s', user_id, node_name)

@@ -7,6 +7,7 @@ from pathlib import Path
 import flask
 from neu_box_webui.master.services.nodes_pool import Nodes_Pool
 from neu_box_webui.master.api.auth import login_required
+from neu_box_webui.master.api.permissions import require_admin
 from neu_box_webui.master.paths import nodes_config_path
 
 nodes_bp = flask.Blueprint('nodes', __name__)
@@ -55,6 +56,7 @@ def _write_config_unlocked(cfg):
 # ── nodes.json 管理（必须注册在 /<node_id>/status 之前，否则 /config 会被当成 node_id） ──
 
 @nodes_bp.route('/config', methods=['GET'])
+@login_required
 def get_config_nodes():
     """返回 nodes.json 中的 nodes_pool 列表。"""
     cfg = _read_config()
@@ -62,7 +64,7 @@ def get_config_nodes():
 
 
 @nodes_bp.route('/config/add', methods=['POST'])
-@login_required
+@require_admin
 def add_config_node():
     """向 nodes.json 新增一个节点。"""
     data = flask.request.get_json() or {}
@@ -97,7 +99,7 @@ def add_config_node():
 
 
 @nodes_bp.route('/config/remove', methods=['POST'])
-@login_required
+@require_admin
 def remove_config_node():
     """从 nodes.json 删除一个节点（按名称匹配）。"""
     data = flask.request.get_json() or {}
@@ -124,6 +126,7 @@ def remove_config_node():
 # ── 运行时状态查询 ──────────────────────────────────────────
 
 @nodes_bp.route('/get_all_nodes', methods=['POST'])
+@login_required
 def get_all_nodes():
     """返回所有已注册节点的列表及当前状态，供前端选择器使用。
     每次请求时主动向所有 worker 查询一次实时状态，确保前端拿到最新数据。"""
@@ -134,6 +137,7 @@ def get_all_nodes():
 
 
 @nodes_bp.route('/<node_id>/status', methods=['GET'])
+@login_required
 def query_node_status(node_id: str):
     """Master 主动查询某个 worker 的实时资源状态。"""
     pool = Nodes_Pool.get_nodes_pool()
@@ -145,6 +149,7 @@ def query_node_status(node_id: str):
 
 
 @nodes_bp.route('/<node_id>/sandboxes', methods=['GET'])
+@login_required
 def list_node_sandboxes(node_id: str):
     """获取节点上所有活跃沙盒（终端 + 命令任务）。代理到 worker 的 GET /sandbox/list"""
     pool = Nodes_Pool.get_nodes_pool()

@@ -15,12 +15,23 @@ from flask import Blueprint, request
 
 from neu_box_webui.config import env_int
 from neu_box_webui.master.services.db import Database
-from neu_box_webui.master.api.auth import login_required
+from neu_box_webui.master.api.auth import get_current_user, login_required
 from neu_box_webui.master.paths import experiment_logs_dir, uploads_dir
 
 experiment_bp = Blueprint('experiment', __name__)
-db = Database.get_instance()
 logger = logging.getLogger('master.experiment')
+
+
+def __getattr__(name: str):
+    """延迟获取 Database 单例，避免导入期绑定导致测试/迁移后拿到旧实例。"""
+    if name == 'db':
+        return Database.get_instance()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+def _db() -> "Database":
+    """每次调用取当前单例（延迟绑定，便于测试替换/迁移）。"""
+    return Database.get_instance()
+
 
 # 实验日志缓存目录
 EXP_LOG_DIR = str(experiment_logs_dir())
@@ -41,24 +52,41 @@ ALLOWED_MIMETYPES = {
 }
 
 
+def _current_username() -> str:
+    user = get_current_user()
+    return user['username'] if user else ''
+
+
+def _is_admin() -> bool:
+    user = get_current_user()
+    return bool(user and user.get('role') == 'admin')
+
+
+def _can_modify(exp: dict) -> bool:
+    """仅创建者或 admin 可编辑/删除。旧数据 created_by 为空时仅 admin。"""
+    if _is_admin():
+        return True
+    return bool(exp.get('created_by')) and exp['created_by'] == _current_username()
+
+
 @experiment_bp.route('/', methods=['POST'])
 @login_required
 def create_experiment():
     """创建实验。
 
     请求体:
-      { "title": "...", "blocks": [...], "tags": [...], "created_by": "...",
-        "folder_id": "..." }
+      { "title": "...", "blocks": [...], "tags": [...], "folder_id": "..." }
+    created_by 由服务端注入当前登录用户名。
     """
     data = request.get_json(silent=True) or {}
     title = (data.get('title') or '').strip()
     if not title:
         return {'error': '实验标题不能为空'}, 400
-    exp_id = db.create_experiment(
+    exp_id = _db().create_experiment(
         title=title,
         blocks=data.get('blocks') or [],
         tags=data.get('tags') or [],
-        created_by=(data.get('created_by') or '').strip(),
+        created_by=_current_username(),
         folder_id=data.get('folder_id') or None,
     )
     _save_logs(data.get('logs') or {})
@@ -70,10 +98,12 @@ def create_experiment():
 def list_experiments():
     search = (request.args.get('search') or '').strip()
     tag = (request.args.get('tag') or '').strip()
-    created_by = (request.args.get('created_by') or '').strip()
     folder_id = request.args.get('folder_id') or None
     limit = request.args.get('limit', 100, type=int)
-    experiments = db.list_experiments(search=search, tag=tag,
+    created_by = ''
+    if request.args.get('scope') == 'mine':
+        created_by = _current_username()
+    experiments = _db().list_experiments(search=search, tag=tag,
                                       created_by=created_by,
                                       folder_id=folder_id,
                                       limit=limit)
@@ -83,7 +113,7 @@ def list_experiments():
 @experiment_bp.route('/<exp_id>', methods=['GET'])
 @login_required
 def get_experiment(exp_id: str):
-    exp = db.get_experiment(exp_id)
+    exp = _db().get_experiment(exp_id)
     if not exp:
         return {'error': '实验记录不存在'}, 404
     return exp, 200
@@ -92,18 +122,21 @@ def get_experiment(exp_id: str):
 @experiment_bp.route('/<exp_id>', methods=['PUT'])
 @login_required
 def update_experiment(exp_id: str):
-    """全量更新实验（含 blocks）。"""
-    exp = db.get_experiment(exp_id)
+    """全量更新实验（含 blocks）。仅创建者或 admin。"""
+    exp = _db().get_experiment(exp_id)
     if not exp:
         return {'error': '实验记录不存在'}, 404
+    if not _can_modify(exp):
+        return {'error': '只能编辑自己的实验'}, 403
     data = request.get_json(silent=True) or {}
-    db.update_experiment(
-        exp_id,
-        title=data.get('title'),
-        blocks=data.get('blocks'),
-        tags=data.get('tags'),
-        folder_id=data.get('folder_id'),
-    )
+    # 请求体中为 None 的字段视为“未提供”，避免部分更新误清空 blocks/tags
+    updates = {
+        k: data[k]
+        for k in ('title', 'blocks', 'tags', 'folder_id')
+        if k in data and data[k] is not None
+    }
+    if updates:
+        _db().update_experiment(exp_id, **updates)
     _save_logs(data.get('logs') or {})
     return {'message': '已保存'}, 200
 
@@ -166,7 +199,7 @@ def upload_image():
 @login_required
 def list_folders():
     """获取文件夹树。"""
-    tree = db.get_folder_tree()
+    tree = _db().get_folder_tree()
     return {'folders': tree}, 200
 
 
@@ -181,7 +214,7 @@ def create_folder():
     name = (data.get('name') or '').strip()
     if not name:
         return {'error': '文件夹名称不能为空'}, 400
-    fid = db.create_folder(name=name, parent_id=data.get('parent_id') or None)
+    fid = _db().create_folder(name=name, parent_id=data.get('parent_id') or None)
     return {'id': fid, 'name': name}, 201
 
 
@@ -195,9 +228,9 @@ def update_folder(fid: str):
     data = request.get_json(silent=True) or {}
     name = (data.get('name') or '').strip()
     if name:
-        db.rename_folder(fid, name)
+        _db().rename_folder(fid, name)
     if 'parent_id' in data:
-        ok = db.move_folder(fid, data.get('parent_id') or None)
+        ok = _db().move_folder(fid, data.get('parent_id') or None)
         if not ok:
             return {'error': '不能移动到自己的子文件夹中'}, 400
     return {'message': '已更新'}, 200
@@ -206,7 +239,7 @@ def update_folder(fid: str):
 @experiment_bp.route('/folders/<fid>', methods=['DELETE'])
 @login_required
 def delete_folder(fid: str):
-    if not db.delete_folder(fid):
+    if not _db().delete_folder(fid):
         return {'error': '文件夹不存在'}, 404
     return {'message': '已删除'}, 200
 
@@ -215,10 +248,13 @@ def delete_folder(fid: str):
 @login_required
 def delete_experiment(exp_id: str):
     # 清理实验引用的图片
-    exp = db.get_experiment(exp_id)
-    if exp:
-        _cleanup_images(exp.get('blocks', []))
-    if not db.delete_experiment(exp_id):
+    exp = _db().get_experiment(exp_id)
+    if not exp:
+        return {'error': '实验记录不存在'}, 404
+    if not _can_modify(exp):
+        return {'error': '只能删除自己的实验'}, 403
+    _cleanup_images(exp.get('blocks') or [])
+    if not _db().delete_experiment(exp_id):
         return {'error': '实验记录不存在'}, 404
     return {'message': '已删除'}, 200
 
@@ -238,7 +274,7 @@ def _cleanup_images(blocks: list):
         return
 
     # 获取所有其他实验的内容，检查是否仍被引用
-    all_exps = db.list_experiments(limit=10000)
+    all_exps = _db().list_experiments(limit=10000)
     referenced = set()
     for other in all_exps:
         for b in (other.get('blocks') or []):

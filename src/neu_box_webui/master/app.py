@@ -60,18 +60,27 @@ def create_app() -> flask.Flask:
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
     # Import blueprints only after environment loading and schema validation.
+    from neu_box_webui.master.api.admin import admin_bp
     from neu_box_webui.master.api.auth import auth_bp
-    from neu_box_webui.master.api.command import command_bp
     from neu_box_webui.master.api.experiment import experiment_bp
     from neu_box_webui.master.api.nodes import nodes_bp
+    from neu_box_webui.master.api.tasks import tasks_bp
 
     app.register_blueprint(auth_bp, url_prefix="/auth")
-    app.register_blueprint(command_bp, url_prefix="/tasks")
+    app.register_blueprint(tasks_bp, url_prefix="/tasks")
     app.register_blueprint(nodes_bp, url_prefix="/nodes")
     app.register_blueprint(experiment_bp, url_prefix="/experiments")
+    app.register_blueprint(admin_bp, url_prefix="/admin")
 
     @app.get("/")
     def home():
+        return flask.send_from_directory(app.static_folder, "index.html")
+
+    @app.get("/<path:page_path>")
+    def spa_page(page_path: str):
+        """Vue SPA 前端路由回退：非 API 路径一律返回 index.html。"""
+        if page_path.startswith("static/"):
+            flask.abort(404)
         return flask.send_from_directory(app.static_folder, "index.html")
 
     @app.get("/static/uploads/<path:filename>")

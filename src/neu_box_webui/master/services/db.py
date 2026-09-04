@@ -28,7 +28,10 @@ from neu_box_webui.database.migrations import require_current_schema
 
 MIGRATIONS_PACKAGE = "neu_box_webui.master.migrations"
 REQUIRED_COLUMNS = {
-    "users": ("id", "username", "password_hash", "role", "created_at"),
+    "users": (
+        "id", "username", "password_hash", "role", "created_at",
+        "is_active", "last_login_at",
+    ),
     "user_credentials": (
         "id", "user_id", "node_name", "username", "created_at",
     ),
@@ -37,6 +40,9 @@ REQUIRED_COLUMNS = {
         "created_at", "updated_at",
     ),
     "folders": ("id", "name", "parent_id", "created_at"),
+    "task_submissions": (
+        "id", "task_id", "node_id", "user_name", "command", "created_at",
+    ),
 }
 REQUIRED_INDEXES = (
     "idx_users_username",
@@ -45,6 +51,8 @@ REQUIRED_INDEXES = (
     "idx_exp_created_by",
     "idx_exp_folder",
     "idx_folder_parent",
+    "idx_ts_user",
+    "idx_ts_node",
 )
 
 
@@ -116,7 +124,7 @@ class Database:
             allowed = {'title', 'blocks', 'tags', 'folder_id'}
             updates = {}
             for k in allowed:
-                if k in fields:
+                if k in fields and fields[k] is not None:
                     val = fields[k]
                     if k in ('blocks', 'tags') and isinstance(val, list):
                         val = json.dumps(val, ensure_ascii=False)
@@ -311,16 +319,16 @@ class Database:
         """通过 ID 获取用户。"""
         with self._conn() as conn:
             row = conn.execute(
-                'SELECT id, username, role, created_at FROM users WHERE id=?',
-                (user_id,)).fetchone()
+                'SELECT id, username, role, created_at, is_active, last_login_at '
+                'FROM users WHERE id=?', (user_id,)).fetchone()
             return dict(row) if row else None
 
     def get_user_by_username(self, username: str) -> dict | None:
         """通过用户名获取用户（不返回密码哈希）。"""
         with self._conn() as conn:
             row = conn.execute(
-                'SELECT id, username, role, created_at FROM users WHERE username=?',
-                (username,),
+                'SELECT id, username, role, created_at, is_active, last_login_at '
+                'FROM users WHERE username=?', (username,),
             ).fetchone()
             return dict(row) if row else None
 
@@ -328,9 +336,42 @@ class Database:
         """列出所有用户（不含密码哈希）。"""
         with self._conn() as conn:
             rows = conn.execute(
-                'SELECT id, username, role, created_at FROM users ORDER BY created_at'
+                'SELECT id, username, role, created_at, is_active, last_login_at '
+                'FROM users ORDER BY created_at'
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def update_last_login(self, user_id: str) -> None:
+        """记录最近登录时间。"""
+        with self._conn() as conn:
+            conn.execute(
+                'UPDATE users SET last_login_at=? WHERE id=?',
+                (time.time(), user_id))
+            conn.commit()
+
+    def set_user_role(self, user_id: str, role: str) -> bool:
+        if role not in ('user', 'admin'):
+            return False
+        with self._conn() as conn:
+            cursor = conn.execute(
+                'UPDATE users SET role=? WHERE id=?', (role, user_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def set_user_active(self, user_id: str, active: bool) -> bool:
+        with self._conn() as conn:
+            cursor = conn.execute(
+                'UPDATE users SET is_active=? WHERE id=?',
+                (1 if active else 0, user_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def count_active_admins(self) -> int:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM users "
+                "WHERE role='admin' AND is_active=1").fetchone()
+            return int(row['n']) if row else 0
 
     def update_password(self, user_id: str, new_password: str) -> bool:
         """修改用户密码。"""
@@ -384,3 +425,30 @@ class Database:
                 (user_id, node_name))
             conn.commit()
             return cursor.rowcount > 0
+
+    # ═══════════════════════════════════════════════════════
+    # Task Submissions（提交登记：我的任务历史 / dashboard）
+    # ═══════════════════════════════════════════════════════
+
+    def record_submission(self, task_id: str, node_id: str,
+                          user_name: str, command: str = '') -> str:
+        """登记一次任务提交，返回记录 id。"""
+        with self._conn() as conn:
+            sub_id = uuid.uuid4().hex[:12]
+            conn.execute(
+                'INSERT INTO task_submissions '
+                '(id, task_id, node_id, user_name, command, created_at) '
+                'VALUES (?, ?, ?, ?, ?, ?)',
+                (sub_id, task_id, node_id, user_name, command, time.time()))
+            conn.commit()
+            return sub_id
+
+    def list_submissions(self, user_name: str, limit: int = 200) -> list[dict]:
+        """按用户列出提交历史（新→旧）。"""
+        with self._conn() as conn:
+            rows = conn.execute(
+                'SELECT id, task_id, node_id, user_name, command, created_at '
+                'FROM task_submissions WHERE user_name=? '
+                'ORDER BY created_at DESC LIMIT ?',
+                (user_name, limit)).fetchall()
+            return [dict(r) for r in rows]

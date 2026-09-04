@@ -39,7 +39,7 @@ def test_master_app_health_and_packaged_static(tmp_path, monkeypatch):
     assert health.status_code == 200
     assert health.json["role"] == "master"
     assert health.json["api_version"] == API_VERSION
-    assert health.json["schema_version"] == 1
+    assert health.json["schema_version"] == 2
     assert client.get("/").status_code == 200
     notice = client.get("/static/notice.txt")
     assert notice.status_code == 200
@@ -53,6 +53,9 @@ def test_master_app_health_and_packaged_static(tmp_path, monkeypatch):
     assert any(path == '/tasks' and 'POST' in methods for path, methods in rules)
     assert any(path == '/tasks' and 'GET' in methods for path, methods in rules)
     assert any(path == '/tasks' and 'DELETE' in methods for path, methods in rules)
+    assert any(path == '/tasks/mine' and 'GET' in methods for path, methods in rules)
+    assert any(path == '/admin/users' and 'GET' in methods for path, methods in rules)
+    assert any(path == '/admin/users' and 'POST' in methods for path, methods in rules)
     assert not any(path.startswith('/command/') for path, _methods in rules)
 
 
