@@ -9,8 +9,10 @@ import os
 import secrets
 import sys
 from datetime import timedelta
+from pathlib import Path
 
 import flask
+from flask import request
 from waitress import serve as waitress_serve
 
 from neu_box_webui import API_VERSION, __version__
@@ -76,10 +78,32 @@ def create_app() -> flask.Flask:
     def home():
         return flask.send_from_directory(app.static_folder, "index.html")
 
+    @app.get("/assets/<path:filename>")
+    def app_assets(filename: str):
+        """Vite 构建产物（/assets/*），与 /static 上传目录分开。"""
+        return flask.send_from_directory(
+            str(Path(app.static_folder) / "assets"), filename)
+
+    # SPA 与 API 同路径冲突（GET /tasks、/admin/users、/experiments/<id>）：
+    # 浏览器导航（Accept 以 text/html 开头）返回 index.html 交给 vue-router；
+    # fetch/XHR（Accept: */*）不受影响，仍走 API。
+    def _wants_html() -> bool:
+        return request.headers.get("Accept", "").strip().lower().startswith(
+            "text/html")
+
+    @app.before_request
+    def _spa_on_api_path():
+        if request.method == "GET" and _wants_html():
+            p = request.path
+            if (p == "/tasks" or p == "/admin/users"
+                    or p.startswith("/experiments/")):
+                return flask.send_from_directory(app.static_folder, "index.html")
+        return None
+
     @app.get("/<path:page_path>")
     def spa_page(page_path: str):
         """Vue SPA 前端路由回退：非 API 路径一律返回 index.html。"""
-        if page_path.startswith("static/"):
+        if page_path.startswith("static/") or page_path.startswith("assets/"):
             flask.abort(404)
         return flask.send_from_directory(app.static_folder, "index.html")
 

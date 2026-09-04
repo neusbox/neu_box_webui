@@ -14,6 +14,27 @@ Neu Box 的中心节点：节点池管理、任务转发、实验记录、Web �
 三者只通过 HTTP 契约相交，代码零依赖（共享的 `config` / `logging_config` /
 `database` 迁移引擎为本仓库自有副本，与 neu_box 仓库同源、独立演进）。
 
+## 前端开发
+
+前端为 Vue 3 SPA，源码在 `web/`（Vite 构建）。构建产物输出到
+`src/neu_box_webui/master/static/` 并已提交仓库——**运行时不需要 Node**，
+直接 `uv run` 即可；只有改前端时才需要构建：
+
+```bash
+cd web
+npm install        # 首次
+npm run build      # 输出到 master/static（index.html + assets/ + public/ 静态资源）
+npm run dev        # 开发模式（:5173，API 代理到 :25565）
+```
+
+页面结构：`/` 概览 · `/tasks` 任务（主队列/我的队列） · `/experiments` 实验
+（列表 + notebook 详情） · `/settings` 个人设置 · `/admin/users` 与 `/admin/nodes`
+（仅管理员）。SPA 路由与 API 同路径的冲突由 master 按 `Accept: text/html`
+区分（浏览器导航返回 index.html，fetch 走 API）。
+
+`web/public/` 下的 `notice.txt`、`explanation.png` 是运行时从
+`/static/notice.txt` 等路径读取的静态资源，构建时自动拷贝。
+
 ## 与 worker 的兼容
 
 - 本仓库 `API_VERSION = 2`（`src/neu_box_webui/__init__.py`）
