@@ -595,6 +595,14 @@ table.table {
   word-break: break-all;
   color: var(--text);
 }
+.log-body pre { margin: 0; font-family: inherit; white-space: pre-wrap; word-break: break-all; }
+/* 任务日志独立页：全宽、占满视口高度 */
+.log-page-card {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 132px);
+  min-height: 420px;
+}
 .log-progress {
   position: relative;
   height: 22px;

@@ -3,6 +3,7 @@ import { auth, fetchMe } from './store'
 import LoginView from './views/LoginView.vue'
 import DashboardView from './views/DashboardView.vue'
 import TasksView from './views/TasksView.vue'
+import TaskLogView from './views/TaskLogView.vue'
 import ExperimentsView from './views/ExperimentsView.vue'
 import ExperimentDetailView from './views/ExperimentDetailView.vue'
 import SettingsView from './views/SettingsView.vue'
@@ -15,6 +16,7 @@ const router = createRouter({
     { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
     { path: '/', name: 'dashboard', component: DashboardView },
     { path: '/tasks', name: 'tasks', component: TasksView },
+    { path: '/tasks/:nodeId/:taskId/log', name: 'task-log', component: TaskLogView },
     { path: '/experiments', name: 'experiments', component: ExperimentsView },
     { path: '/experiments/:id', name: 'experiment-detail', component: ExperimentDetailView },
     { path: '/settings', name: 'settings', component: SettingsView },
@@ -49,7 +51,7 @@ router.beforeEach(async (to) => {
 
 router.afterEach((to) => {
   const titles = {
-    dashboard: '概览', tasks: '任务', experiments: '实验',
+    dashboard: '概览', tasks: '任务', 'task-log': '任务日志', experiments: '实验',
     'experiment-detail': '实验详情', settings: '设置',
     'admin-users': '用户管理', 'admin-nodes': '节点管理',
   }

@@ -67,6 +67,15 @@ function exportLog() {
   toast('日志已导出', 'success')
 }
 
+// 全宽独立日志页（新标签页打开，可自由缩放/搜索，不影响任务页）
+function openInNewPage() {
+  if (!props.task || !props.nodeId) return
+  window.open(
+    `/tasks/${encodeURIComponent(props.nodeId)}/${encodeURIComponent(props.task.task_id)}/log`,
+    '_blank', 'noopener'
+  )
+}
+
 defineExpose({ reload: load })
 </script>
 
@@ -77,6 +86,9 @@ defineExpose({ reload: load })
       <span class="card-title">任务日志</span>
       <span v-if="task" class="card-sub mono">{{ task.task_id }}</span>
       <span class="grow" />
+      <button v-if="task" class="btn btn-ghost btn-icon" title="新页面打开（全宽查看）" @click="openInNewPage">
+        <Icon name="external" :size="14" />
+      </button>
       <button v-if="task" class="btn btn-ghost btn-icon" title="重新加载" @click="load">
         <Icon name="refresh" :size="14" />
       </button>
@@ -125,6 +137,10 @@ defineExpose({ reload: load })
 
       <div v-if="state === 'done'" class="log-toolbar">
         <span class="text-3 small grow">{{ logText.length.toLocaleString() }} 字符</span>
+        <button v-if="task" class="btn btn-sm" title="在全宽新页面中查看日志"
+                @click="openInNewPage()">
+          <Icon name="external" :size="13" /> 新页面
+        </button>
         <button v-if="isFinished" class="btn btn-sm" @click="emit('save-exp', task)">
           <Icon name="flask" :size="13" /> 保存为实验记录
         </button>
