@@ -196,6 +196,11 @@ async function loadQueue(force = false) {
       queue.value = data.queue || []
     }
     checked.value = []
+    // 右侧面板打开的任务同步最新队列数据（排队→运行 后自动切到日志）
+    if (logTask.value) {
+      const fresh = queue.value.find(t => t.task_id === logTask.value.task_id)
+      if (fresh) logTask.value = { ...fresh }
+    }
   } catch (e) {
     toast(e.message, 'error')
   } finally {
