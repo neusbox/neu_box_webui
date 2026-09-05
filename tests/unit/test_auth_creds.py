@@ -234,9 +234,9 @@ def test_my_queue_includes_credential_label(env):
     queue = client.get(f"/tasks/mine?node_id={NODE_ID}").get_json()["queue"]
     assert {t["task_id"] for t in queue} == {"t-alice", "t-al"}
 
-    # 聚合视图
+    # 聚合视图（total 现含终端沙盒，这里只看任务数）
     agg = client.get("/tasks/mine").get_json()
-    assert agg["total"] == 2
+    assert {t["task_id"] for t in agg["groups"][0]["tasks"]} == {"t-alice", "t-al"}
 
     # bob 看不到 al 的任务
     _login(client, "bob")

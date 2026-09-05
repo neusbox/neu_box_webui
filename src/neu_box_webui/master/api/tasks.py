@@ -102,6 +102,63 @@ def _forward(node_id: str, path: str, params: dict | None = None,
     return pool.forward_to_node(node_id, path, body or {}, method=method, timeout=timeout)
 
 
+def _sandbox_rows(node_id: str, labels: set[str] | None = None) -> list[dict]:
+    """终端沙盒（neu-sbox acquire）→ 队列行视图。
+
+    沙盒不是队列任务，但同样占用节点资源（CPU/内存/卡），
+    合并进队列展示避免「卡被谁占了查不到」。status='terminal'、
+    sandbox=True 供前端渲染与删除路由（release 而非任务删除）。
+    labels 非 None 时只保留属主在 labels 内的沙盒。
+    """
+    try:
+        resp = _forward(node_id, '/sandbox/list', timeout=10)
+        data = resp.json() if resp.ok else {}
+    except ValueError:
+        return []
+    rows = []
+    for s in data.get('sandboxes') or []:
+        name = s.get('name') or ''
+        if not name:
+            continue
+        owner = s.get('owner') or ''
+        if labels is not None and owner not in labels:
+            continue
+        devices = s.get('devices') or []
+        pids = s.get('pids') or []
+        rows.append({
+            'task_id': name,
+            'sandbox': True,
+            'user_id': owner,
+            'command': f"[终端沙盒] PID {', '.join(map(str, pids)) or '?'}",
+            'status': 'terminal',
+            'position': 0,
+            'priority': 0,
+            'cpu': s.get('cpu', 0),
+            'mem': s.get('mem', '0'),
+            'device_num': len(devices),
+            'devices': devices,
+            'eta': None,
+            'est_time': 0,
+            'target': {'type': 'host'},
+            'created_at': s.get('created_at'),
+            'pids': pids,
+        })
+    return rows
+
+
+def _sandbox_owners(node_id: str) -> dict[str, str]:
+    """节点上所有沙盒的 name → owner 映射（删除归属校验用）。"""
+    try:
+        resp = _forward(node_id, '/sandbox/list', timeout=10)
+        data = resp.json() if resp.ok else {}
+    except ValueError:
+        return {}
+    return {
+        s['name']: (s.get('owner') or '')
+        for s in data.get('sandboxes') or [] if s.get('name')
+    }
+
+
 def _task_owner(node_id: str, task_id: str) -> str | None:
     """查询单个任务的归属用户名；查询失败返回 None。"""
     try:
@@ -198,6 +255,11 @@ def list_tasks():
         payload['queue'] = [
             t for t in payload['queue'] if t.get('user_id') in labels
         ]
+    # 终端沙盒同样占用节点资源，合并展示（mine=1 时仅显示自己的）
+    if isinstance(payload, dict) and 'queue' in payload:
+        labels = _my_labels(_node_name(node_id)) \
+            if request.args.get('mine') == '1' else None
+        payload['sandboxes'] = _sandbox_rows(node_id, labels)
     return payload, resp.status_code
 
 
@@ -226,6 +288,7 @@ def list_my_tasks():
             payload['queue'] = [
                 t for t in payload['queue'] if t.get('user_id') in labels
             ]
+            payload['sandboxes'] = _sandbox_rows(node_id, labels)
         return payload, resp.status_code
 
     # 跨节点聚合：并发拉取在线节点，单节点失败不影响其他节点
@@ -245,11 +308,13 @@ def list_my_tasks():
             queue = payload.get('queue', []) if isinstance(payload, dict) else []
             labels = _labels_for(user, node['name'])
             mine = [t for t in queue if t.get('user_id') in labels]
+            sandboxes = _sandbox_rows(node['node_id'], labels)
             return {
                 'node_id': node['node_id'],
                 'node_name': node['name'],
                 'node_status': 'online',
                 'tasks': mine,
+                'sandboxes': sandboxes,
             }
         except ValueError:
             return None
@@ -260,7 +325,7 @@ def list_my_tasks():
             if result is not None:
                 groups.append(result)
     groups.sort(key=lambda g: g['node_name'])
-    total = sum(len(g['tasks']) for g in groups)
+    total = sum(len(g['tasks']) + len(g['sandboxes']) for g in groups)
     return {'groups': groups, 'offline_nodes': offline_nodes,
             'total': total}, 200
 
@@ -333,12 +398,15 @@ def get_task_log(task_id: str):
 @tasks_bp.route('', methods=['DELETE'])
 @login_required
 def delete_tasks():
-    """批量删除任务，转发到指定 Worker。
+    """批量删除任务/终端沙盒，转发到指定 Worker。
 
     Body: { "node_id": "...", "task_ids": [...] }
 
-    非 admin 只能删除自己的任务：逐条校验，全部被拒时返回 403，
-    部分被拒时删除允许的并在响应中附带 denied 列表。
+    task_ids 可混合命令任务 ID 与沙盒名（sbx_*.slice）：
+    沙盒走 /sandbox/release 销毁（会终止其中进程）。
+
+    非 admin 只能删除自己的任务/沙盒：逐条校验，全部被拒时
+    返回 403，部分被拒时删除允许的并附带 denied 列表。
     """
     data = request.get_json(silent=True) or {}
     node_id = (data.get('node_id') or '').strip()
@@ -349,30 +417,59 @@ def delete_tasks():
     if not task_ids:
         return {'error': 'task_ids 不能为空'}, 400
 
-    username = _current_username()
+    # 终端沙盒名与任务 ID 分流：沙盒走 release，不是任务删除
+    sandbox_ids = {
+        tid for tid in task_ids
+        if tid.startswith('sbx_') and tid.endswith('.slice')
+    }
+    task_ids_only = [tid for tid in task_ids if tid not in sandbox_ids]
+
     denied: list[str] = []
     if not _is_admin():
-        owners = _task_owners(node_id, task_ids)
+        owners = _task_owners(node_id, task_ids_only)
         labels = _my_labels(_node_name(node_id))
+        sbx_owners = _sandbox_owners(node_id) if sandbox_ids else {}
         allowed = [
-            tid for tid in task_ids if owners.get(tid) in labels
+            tid for tid in task_ids_only if owners.get(tid) in labels
         ]
-        denied = [tid for tid in task_ids if tid not in allowed]
+        denied += [tid for tid in task_ids_only if tid not in allowed]
+        allowed += [tid for tid in sandbox_ids if sbx_owners.get(tid) in labels]
+        denied += [tid for tid in sandbox_ids if sbx_owners.get(tid) not in labels]
         if not allowed:
-            return {'error': '只能删除自己的任务（被拒: %s）' % ', '.join(denied)}, 403
+            return {'error': '只能删除自己的任务/沙盒（被拒: %s）' % ', '.join(denied)}, 403
     else:
         allowed = list(task_ids)
 
-    try:
-        resp = _forward(node_id, '/tasks', method='DELETE',
-                        body={'task_ids': allowed})
-        payload = resp.json()
-    except ValueError as e:
-        return {'error': f'{e}。请检查是否选择了正确的节点'}, 404
+    deleted = 0
+    if task_ids_only:
+        try:
+            resp = _forward(node_id, '/tasks', method='DELETE',
+                            body={'task_ids': [t for t in allowed
+                                                if t not in sandbox_ids]})
+            payload = resp.json() if resp.ok else {}
+        except ValueError as e:
+            return {'error': f'{e}。请检查是否选择了正确的节点'}, 404
+        if resp.ok and isinstance(payload, dict):
+            deleted += payload.get('deleted', 0)
 
-    if resp.ok and isinstance(payload, dict) and denied:
+    for name in [tid for tid in allowed if tid in sandbox_ids]:
+        try:
+            resp = _forward(node_id, '/sandbox/release', method='POST',
+                            body={'sandbox_name': name})
+        except ValueError:
+            resp = None
+        if resp is not None and resp.ok:
+            deleted += 1
+        else:
+            denied.append(name)
+
+    message = f'已删除 {deleted} 项'
+    if denied:
+        message += f'，{len(denied)} 项失败/被拒'
+    payload = {'deleted': deleted, 'message': message}
+    if denied:
         payload['denied'] = denied
-    return payload, resp.status_code
+    return payload, 200
 
 
 def _task_owners(node_id: str, task_ids: list[str]) -> dict[str, str | None]:

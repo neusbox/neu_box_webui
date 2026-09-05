@@ -369,6 +369,7 @@ a:hover { text-decoration: underline; }
   flex: none;
 }
 .badge.queued { background: var(--warning-soft); color: var(--warning); }
+.badge.terminal { background: var(--accent-soft); color: var(--accent); }
 .badge.running { background: var(--running-soft); color: var(--running); }
 .badge.running .dot { animation: pulse 1.2s ease-in-out infinite; }
 .badge.completed { background: var(--success-soft); color: var(--success); }

@@ -36,7 +36,7 @@ class _FakeResponse:
 
 
 class FakeWorker:
-    """模拟 worker 的 /tasks 行为。"""
+    """模拟 worker 的 /tasks 与 /sandbox 行为。"""
 
     def __init__(self):
         self.queue = [
@@ -45,14 +45,34 @@ class FakeWorker:
             {"task_id": "t-bob", "user_id": "bob", "command": "echo b",
              "status": "queued", "position": 1},
         ]
+        self.sandboxes = [
+            {"name": "sbx_alice_43210.slice", "owner": "alice",
+             "cpu": 4, "mem": "8G", "devices": ["235:0"],
+             "created_at": 1234.0, "pids": [43210]},
+        ]
         self.submitted: list[dict] = []
         self.deleted: list[list[str]] = []
+        self.released: list[str] = []
 
     def request(self, method: str, url: str, **kwargs):
         path = url.split("://", 1)[1].split("/", 1)[1]
 
         if method == "GET" and path == "tasks":
             return _FakeResponse(200, {"queue": self.queue})
+
+        if method == "GET" and path == "sandbox/list":
+            return _FakeResponse(
+                200, {"sandboxes": self.sandboxes, "current_sandbox": None})
+
+        if method == "POST" and path == "sandbox/release":
+            body = kwargs.get("json") or {}
+            name = body.get("sandbox_name", "")
+            if any(s["name"] == name for s in self.sandboxes):
+                self.sandboxes = [s for s in self.sandboxes
+                                  if s["name"] != name]
+                self.released.append(name)
+                return _FakeResponse(200, {"message": f"沙盒 {name} 已销毁"})
+            return _FakeResponse(500, {"error": f"沙盒 {name} 销毁失败"})
 
         if method == "POST" and path == "tasks":
             body = kwargs.get("json") or {}
@@ -62,10 +82,12 @@ class FakeWorker:
 
         if method == "DELETE" and path == "tasks":
             body = kwargs.get("json") or {}
-            self.deleted.append(body.get("task_ids", []))
-            for tid in body.get("task_ids", []):
-                self.queue = [t for t in self.queue if t["task_id"] != tid]
-            return _FakeResponse(200, {"message": "已删除"})
+            ids = body.get("task_ids", [])
+            self.deleted.append(ids)
+            before = len(self.queue)
+            self.queue = [t for t in self.queue if t["task_id"] not in ids]
+            return _FakeResponse(
+                200, {"deleted": before - len(self.queue), "message": "已删除"})
 
         if path.startswith("tasks/") and path.endswith("/log"):
             task_id = path[len("tasks/"):-len("/log")]
@@ -232,12 +254,13 @@ def test_my_tasks_aggregate(env):
     client = env["client"]
     _login(client, "alice")
     data = client.get("/tasks/mine").get_json()
-    assert data["total"] == 1
+    assert data["total"] == 2  # 1 个任务 + 1 个自己的终端沙盒
     assert len(data["groups"]) == 1
     group = data["groups"][0]
     assert group["node_name"] == "gpu-01"
     assert group["node_status"] == "online"
     assert [t["task_id"] for t in group["tasks"]] == ["t-alice"]
+    assert [s["task_id"] for s in group["sandboxes"]] == ["sbx_alice_43210.slice"]
     assert data["offline_nodes"] == []
 
 
@@ -421,3 +444,74 @@ def test_legacy_experiment_without_owner_only_admin(env):
 
     _login(client, "root")
     assert client.delete(f"/experiments/{exp_id}").status_code == 200
+
+
+# ═══════════════════════════════════════════════════════════════
+# 终端沙盒：队列合并展示 + 删除走 release 路由
+# ═══════════════════════════════════════════════════════════════
+
+def test_main_queue_includes_sandbox_rows(env):
+    """主队列响应带 sandboxes 字段（全员可见，与主队列任务一致）。"""
+    client = env["client"]
+    _login(client, "bob")
+    data = client.get(f"/tasks?node_id={NODE_ID}").get_json()
+    assert len(data["sandboxes"]) == 1
+    row = data["sandboxes"][0]
+    assert row["task_id"] == "sbx_alice_43210.slice"
+    assert row["user_id"] == "alice"
+    assert row["status"] == "terminal"
+    assert row["sandbox"] is True
+    assert row["device_num"] == 1 and row["devices"] == ["235:0"]
+
+
+def test_main_queue_mine_filters_sandboxes(env):
+    client = env["client"]
+    _login(client, "alice")
+    data = client.get(f"/tasks?node_id={NODE_ID}&mine=1").get_json()
+    assert [s["task_id"] for s in data["sandboxes"]] == ["sbx_alice_43210.slice"]
+
+    _login(client, "bob")
+    data = client.get(f"/tasks?node_id={NODE_ID}&mine=1").get_json()
+    assert data["sandboxes"] == []
+
+
+def test_my_tasks_single_node_includes_own_sandboxes(env):
+    client = env["client"]
+    _login(client, "alice")
+    data = client.get(f"/tasks/mine?node_id={NODE_ID}").get_json()
+    assert [s["task_id"] for s in data["sandboxes"]] == ["sbx_alice_43210.slice"]
+
+    _login(client, "bob")
+    data = client.get(f"/tasks/mine?node_id={NODE_ID}").get_json()
+    assert data["sandboxes"] == []
+
+
+def test_delete_sandbox_routed_to_release(env):
+    """沙盒名走 /sandbox/release；非属主非 admin 被拒，属主可销毁。"""
+    client, worker = env["client"], env["worker"]
+    sbx = "sbx_alice_43210.slice"
+
+    _login(client, "bob")
+    resp = client.delete("/tasks", json={"node_id": NODE_ID, "task_ids": [sbx]})
+    assert resp.status_code == 403
+    assert worker.released == []
+
+    _login(client, "alice")
+    resp = client.delete("/tasks", json={"node_id": NODE_ID, "task_ids": [sbx]})
+    assert resp.status_code == 200
+    assert worker.released == [sbx]
+    assert worker.sandboxes == []
+    assert resp.get_json()["deleted"] == 1
+
+
+def test_admin_delete_mixed_tasks_and_sandboxes(env):
+    """混合删除：任务走 DELETE /tasks，沙盒走 release，计数合并。"""
+    client, worker = env["client"], env["worker"]
+    _login(client, "root")
+    resp = client.delete("/tasks", json={
+        "node_id": NODE_ID,
+        "task_ids": ["t-bob", "sbx_alice_43210.slice"]})
+    assert resp.status_code == 200
+    assert worker.deleted == [["t-bob"]]
+    assert worker.released == ["sbx_alice_43210.slice"]
+    assert resp.get_json()["deleted"] == 2

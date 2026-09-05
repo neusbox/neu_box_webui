@@ -26,8 +26,8 @@ async function load() {
     state.value = 'idle'
     return
   }
-  // 排队任务还没产生日志 → 不发起请求，面板只展示基本信息
-  if (props.task.status === 'queued') {
+  // 排队任务还没产生日志；终端沙盒没有命令日志 → 不发起请求，面板只展示基本信息
+  if (props.task.status === 'queued' || props.task.sandbox) {
     state.value = 'done'
     logText.value = ''
     errorMsg.value = ''
@@ -69,6 +69,7 @@ const progressText = computed(() => {
 const isFinished = computed(() =>
   !!props.task && (props.task.status === 'completed' || props.task.status === 'failed'))
 const isQueued = computed(() => !!props.task && props.task.status === 'queued')
+const isSandbox = computed(() => !!props.task && !!props.task.sandbox)
 
 function exportLog() {
   if (!logText.value) return
@@ -93,10 +94,10 @@ defineExpose({ reload: load })
   <div class="log-panel card">
     <div class="card-head">
       <Icon name="terminal" :size="14" />
-      <span class="card-title">{{ isQueued ? '任务信息' : '任务日志' }}</span>
+      <span class="card-title">{{ isSandbox ? '沙盒信息' : isQueued ? '任务信息' : '任务日志' }}</span>
       <span v-if="task" class="card-sub mono">{{ task.task_id }}</span>
       <span class="grow" />
-      <button v-if="task && !isQueued" class="btn btn-ghost btn-icon" title="新页面打开（全宽查看）" @click="openInNewPage">
+      <button v-if="task && !isQueued && !isSandbox" class="btn btn-ghost btn-icon" title="新页面打开（全宽查看）" @click="openInNewPage">
         <Icon name="external" :size="14" />
       </button>
       <button v-if="task" class="btn btn-ghost btn-icon" title="重新加载" @click="load">
@@ -131,7 +132,10 @@ defineExpose({ reload: load })
         <span class="k">状态</span>
         <span class="v">
           {{ statusLabel(task.status) }}
-          <template v-if="task.result">
+          <template v-if="isSandbox && task.pids && task.pids.length">
+            · PID {{ task.pids.join(', ') }}
+          </template>
+          <template v-else-if="task.result">
             · 返回码 {{ task.result.returncode }}
             <span v-if="task.result.timed_out" class="text-danger">（超时）</span>
           </template>
@@ -154,9 +158,15 @@ defineExpose({ reload: load })
         <p class="small">开始后此处显示日志，可点「重新加载」刷新</p>
       </div>
 
+      <div v-else-if="isSandbox" class="empty-state">
+        <div class="icon">⬡</div>
+        <p>终端沙盒（neu-sbox）</p>
+        <p class="small">非命令任务，无日志；终端退出或队列中删除时释放资源</p>
+      </div>
+
       <div v-else class="log-body">{{ logText || '(无输出)' }}</div>
 
-      <div v-if="state === 'done' && !isQueued" class="log-toolbar">
+      <div v-if="state === 'done' && !isQueued && !isSandbox" class="log-toolbar">
         <span class="text-3 small grow">{{ logText.length.toLocaleString() }} 字符</span>
         <button v-if="task" class="btn btn-sm" title="在全宽新页面中查看日志"
                 @click="openInNewPage()">

@@ -2,6 +2,8 @@
 /**
  * 任务队列列表。
  * - 行: 位置/状态 · 用户 · 命令 · ETA · 操作（标注/重跑）
+ *   · 位置列: ▶=运行中 ⬡=终端沙盒 数字=队列位置
+ * - 勾选 → 批量删除（任务删除 / 沙盒销毁）
  * - 勾选 → 批量删除
  * - 点击任意行 → 右侧显示基本信息（运行/已完成/失败另可看日志）
  * - markedTasks: 本地 ★ 标注（localStorage）
@@ -48,6 +50,7 @@ const checkedCount = computed(() => props.checked.length)
              @change="emit('toggle-check', task.task_id)">
       <span class="pos">
         <template v-if="task.status === 'running'">▶</template>
+        <template v-else-if="task.sandbox">⬡</template>
         <template v-else>{{ task.position ?? '?' }}</template>
       </span>
       <span v-if="showNode" class="text-3 small ellipsis" style="width:84px;flex:none"
