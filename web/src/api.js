@@ -16,7 +16,9 @@ async function request(path, options = {}) {
   const init = { method, headers: { ...headers }, signal }
   if (body !== undefined) {
     if (!(body instanceof FormData)) {
-      headers['Content-Type'] = 'application/json'
+      // 注意：必须写到 init.headers（init 的独立拷贝），
+      // 写到 headers 源对象上不会随 fetch 发出 → Flask 收不到 JSON
+      init.headers['Content-Type'] = 'application/json'
       init.body = JSON.stringify(body)
     } else {
       init.body = body
