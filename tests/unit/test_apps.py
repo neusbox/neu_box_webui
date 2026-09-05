@@ -39,7 +39,7 @@ def test_master_app_health_and_packaged_static(tmp_path, monkeypatch):
     assert health.status_code == 200
     assert health.json["role"] == "master"
     assert health.json["api_version"] == API_VERSION
-    assert health.json["schema_version"] == 2
+    assert health.json["schema_version"] == 3
     assert client.get("/").status_code == 200
     notice = client.get("/static/notice.txt")
     assert notice.status_code == 200

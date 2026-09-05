@@ -11,13 +11,23 @@
 
 import functools
 import logging
+import re
 
 from flask import Blueprint, request, session
 
+from neu_box_webui.config import env_text
 from neu_box_webui.master.services.db import Database
 
 auth_bp = Blueprint('auth', __name__)
 logger = logging.getLogger('master.auth')
+
+# 注册开关：默认开放（实验室集群内部使用），设 NEU_BOX_ALLOW_REGISTRATION=0 关闭
+def _registration_allowed() -> bool:
+    return env_text('NEU_BOX_ALLOW_REGISTRATION', '1') in ('1', 'true', 'yes')
+
+_USERNAME_RE = re.compile(r'^[A-Za-z0-9_.-]{3,32}$')
+# 节点 OS 用户名可以较短（如 "al"、"li"）；不允许单字符
+_NODE_USER_RE = re.compile(r'^[A-Za-z0-9_.-]{2,32}$')
 
 
 def __getattr__(name: str):
@@ -97,6 +107,45 @@ def login():
     }, 200
 
 
+@auth_bp.route('/register', methods=['GET'])
+def register_status():
+    """注册开关状态（前端登录页据此显示/隐藏注册入口）。"""
+    return {'allowed': _registration_allowed()}, 200
+
+
+@auth_bp.route('/register', methods=['POST'])
+def register():
+    """自助注册（普通用户角色）。
+
+    请求体: { "username": "...", "password": "..." }
+    成功后自动登录。开关关闭时 403。
+    """
+    if not _registration_allowed():
+        return {'error': '注册已关闭，请联系管理员创建账号'}, 403
+
+    data = request.get_json(silent=True) or {}
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+
+    if not _USERNAME_RE.match(username):
+        return {'error': '用户名需 3-32 位字母、数字、_、. 或 -'}, 400
+    if len(password) < 4 or len(password) > 128:
+        return {'error': '密码长度需 4-128 位'}, 400
+    if _db().get_user_by_username(username):
+        return {'error': '用户名已被占用'}, 409
+
+    user_id = _db().create_user(username, password, role='user')
+    session.permanent = True
+    session['user_id'] = user_id
+    _db().update_last_login(user_id)
+    logger.info('新用户注册: %s', username)
+
+    return {
+        'user': {'id': user_id, 'username': username, 'role': 'user'},
+        'message': '注册成功',
+    }, 201
+
+
 @auth_bp.route('/logout', methods=['POST'])
 def logout():
     """登出，清空 session。"""
@@ -153,44 +202,63 @@ def change_password():
 
 
 # ═══════════════════════════════════════════════════════════════
-# 节点凭据管理
+# 节点凭据管理（节点上的 OS 用户名 + 密码）
+#
+# 语义：每个用户为每个节点维护自己的 OS 账号。
+#   - username: 提交任务到该节点时作为 worker 侧 user_id 归属
+#               （未设置时用 WebUI 用户名）
+#   - password: Fernet 加密存 master 侧，仅本人可见（供登录节点参考）
 # ═══════════════════════════════════════════════════════════════
 
 @auth_bp.route('/credentials', methods=['GET'])
 @login_required
 def list_credentials():
-    """获取当前用户所有已存节点凭据。
-
-    返回: { "credentials": [{"node_name":"...","username":"..."}, ...] }
-    """
+    """获取当前用户所有已存节点凭据（不含密码，仅 has_password 标志）。"""
     user_id = session['user_id']
     creds = _db().get_credentials(user_id)
     return {'credentials': creds}, 200
 
 
-@auth_bp.route('/credentials', methods=['POST'])
+@auth_bp.route('/credentials/<node_name>', methods=['PUT'])
 @login_required
-def save_credential():
+def save_credential(node_name: str):
     """保存或更新一条节点凭据。
 
-    请求体: { "node_name": "...", "username": "..." }
+    请求体: { "username": "...", "password": "...?" }
+    password 缺省 = 不改密码；空串 = 清除密码。
     """
     data = request.get_json(silent=True) or {}
-    node_name = (data.get('node_name') or '').strip()
     username = (data.get('username') or '').strip()
-
-    errors = []
-    if not node_name:
-        errors.append('节点名称不能为空')
     if not username:
-        errors.append('用户名不能为空')
-    if errors:
-        return {'error': '; '.join(errors)}, 400
+        return {'error': '节点用户名不能为空'}, 400
+    if not _NODE_USER_RE.match(username):
+        return {'error': '节点用户名需 2-32 位字母、数字、_、. 或 -'}, 400
+
+    password = data.get('password', None)
+    if password is not None:
+        password = str(password)
+        if len(password) > 128:
+            return {'error': '密码长度需 ≤ 128 位'}, 400
 
     user_id = session['user_id']
-    _db().save_credential(user_id, node_name, username)
-    logger.info('用户 %s 保存节点凭据: %s → %s', user_id, node_name, username)
+    _db().save_credential(user_id, node_name, username, password)
+    logger.info('用户 %s 更新节点凭据: %s → %s (password=%s)',
+                user_id, node_name, username,
+                'unchanged' if password is None else ('cleared' if password == '' else 'set'))
     return {'message': f'节点 "{node_name}" 凭据已保存'}, 200
+
+
+@auth_bp.route('/credentials/<node_name>/password', methods=['GET'])
+@login_required
+def reveal_credential_password(node_name: str):
+    """查看本人某节点凭据的密码（明文返回，仅本人）。"""
+    user_id = session['user_id']
+    if not _db().get_credential(user_id, node_name):
+        return {'error': '该节点的凭据不存在'}, 404
+    password = _db().get_credential_password(user_id, node_name)
+    if password is None:
+        return {'password': None}, 200
+    return {'password': password}, 200
 
 
 @auth_bp.route('/credentials/<node_name>', methods=['DELETE'])

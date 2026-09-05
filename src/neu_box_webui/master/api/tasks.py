@@ -42,6 +42,51 @@ def _current_username() -> str:
     return user['username'] if user else ''
 
 
+def _node_name(node_id: str) -> str | None:
+    """node_id → 节点名（凭据按节点名存储）。"""
+    try:
+        node = Nodes_Pool.get_nodes_pool().get_node_by_id(node_id)
+    except Exception:
+        return None
+    return node.name if node else None
+
+
+def _labels_for(user: dict | None, node_name: str | None) -> set[str]:
+    """某用户在该节点上的任务 user_id 归属集合。
+
+    = {WebUI 用户名} ∪ {节点凭据用户名（如已设置）}。
+    提交任务时用凭据用户名作 worker 侧 user_id（未设置时用 WebUI
+    用户名），所以两个标签都可能出现在历史任务上。
+    注意：需要显式传入 user（跨线程场景下无法读 session）。
+    """
+    labels: set[str] = set()
+    if not user:
+        return labels
+    labels.add(user['username'])
+    if node_name:
+        cred = _db().get_credential(user['id'], node_name)
+        if cred and cred.get('username'):
+            labels.add(cred['username'])
+    return labels
+
+
+def _my_labels(node_name: str | None) -> set[str]:
+    """当前登录用户版本（仅限请求上下文内调用）。"""
+    return _labels_for(get_current_user(), node_name)
+
+
+def _worker_user_id(node_id: str) -> str:
+    """提交任务时的 worker 侧 user_id：优先用该节点的凭据用户名。"""
+    username = _current_username()
+    node_name = _node_name(node_id)
+    if node_name:
+        user = get_current_user()
+        cred = _db().get_credential(user['id'], node_name) if user else None
+        if cred and cred.get('username'):
+            return cred['username']
+    return username
+
+
 def _is_admin() -> bool:
     user = get_current_user()
     return bool(user and user.get('role') == 'admin')
@@ -98,7 +143,7 @@ def create_task():
 
     req = {
         'command': command,
-        'user_id': username,
+        'user_id': _worker_user_id(node_id),
         'cpu': data.get('cpu', 0),
         'memory': data.get('memory', 0),
         'mem_unit': data.get('mem_unit', 'GB'),
@@ -149,9 +194,9 @@ def list_tasks():
 
     if request.args.get('mine') == '1' and isinstance(payload, dict) \
             and 'queue' in payload:
-        username = _current_username()
+        labels = _my_labels(_node_name(node_id))
         payload['queue'] = [
-            t for t in payload['queue'] if t.get('user_id') == username
+            t for t in payload['queue'] if t.get('user_id') in labels
         ]
     return payload, resp.status_code
 
@@ -177,13 +222,15 @@ def list_my_tasks():
         except ValueError as e:
             return {'error': f'{e}。请检查是否选择了正确的节点'}, 404
         if isinstance(payload, dict) and 'queue' in payload:
+            labels = _my_labels(_node_name(node_id))
             payload['queue'] = [
-                t for t in payload['queue'] if t.get('user_id') == username
+                t for t in payload['queue'] if t.get('user_id') in labels
             ]
         return payload, resp.status_code
 
     # 跨节点聚合：并发拉取在线节点，单节点失败不影响其他节点
     pool = Nodes_Pool.get_nodes_pool()
+    user = get_current_user()
     nodes = pool.get_all_nodes()
     online = [n for n in nodes if n.get('status') == 'online']
     offline_nodes = [
@@ -196,7 +243,8 @@ def list_my_tasks():
             resp = pool.forward_get_to_node(node['node_id'], '/tasks', timeout=10)
             payload = resp.json() if resp.ok else {}
             queue = payload.get('queue', []) if isinstance(payload, dict) else []
-            mine = [t for t in queue if t.get('user_id') == username]
+            labels = _labels_for(user, node['name'])
+            mine = [t for t in queue if t.get('user_id') in labels]
             return {
                 'node_id': node['node_id'],
                 'node_name': node['name'],
@@ -251,7 +299,8 @@ def get_task_log(task_id: str):
         owner = _task_owner(node_id, task_id)
         # owner 为 None 表示查不到归属（任务不存在/节点异常），
         # 由下方 worker 转发返回 404/错误，不在此拦截
-        if owner is not None and owner != _current_username() and not _is_admin():
+        if owner is not None and not _is_admin() \
+                and owner not in _my_labels(_node_name(node_id)):
             return {'error': '只能查看自己任务的日志'}, 403
 
     params = {}
@@ -266,7 +315,13 @@ def get_task_log(task_id: str):
             return resp.text, resp.status_code, {
                 'Content-Type': resp.headers.get('Content-Type', 'text/plain'),
             }
-        return resp.json(), resp.status_code
+        content_type = resp.headers.get('Content-Type', '')
+        if 'json' in content_type:
+            return resp.json(), resp.status_code
+        # worker 返回非 JSON（纯文本日志）时透传文本
+        return resp.text, resp.status_code, {
+            'Content-Type': content_type or 'text/plain',
+        }
     except ValueError as e:
         return {'error': f'{e}。请检查是否选择了正确的节点'}, 404
 
@@ -298,8 +353,9 @@ def delete_tasks():
     denied: list[str] = []
     if not _is_admin():
         owners = _task_owners(node_id, task_ids)
+        labels = _my_labels(_node_name(node_id))
         allowed = [
-            tid for tid in task_ids if owners.get(tid) == username
+            tid for tid in task_ids if owners.get(tid) in labels
         ]
         denied = [tid for tid in task_ids if tid not in allowed]
         if not allowed:

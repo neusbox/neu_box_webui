@@ -29,6 +29,12 @@ async function login(username, password) {
   return data.user
 }
 
+async function register(username, password) {
+  const data = await api.post('/auth/register', { username, password })
+  auth.user = data.user   // 注册成功即自动登录
+  return data.user
+}
+
 async function logout() {
   try { await api.post('/auth/logout') } catch { /* 忽略 */ }
   auth.user = null
@@ -50,5 +56,5 @@ export function dismissToast(id) {
   if (i >= 0) toasts.splice(i, 1)
 }
 
-export { fetchMe, login, logout, toasts }
+export { fetchMe, login, register, logout, toasts }
 export const authRO = readonly(auth)

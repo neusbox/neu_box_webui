@@ -34,6 +34,7 @@ REQUIRED_COLUMNS = {
     ),
     "user_credentials": (
         "id", "user_id", "node_name", "username", "created_at",
+        "password", "updated_at",
     ),
     "experiments": (
         "id", "title", "blocks", "tags", "created_by", "folder_id",
@@ -388,34 +389,80 @@ class Database:
     # ═══════════════════════════════════════════════════════════
 
     def save_credential(self, user_id: str, node_name: str,
-                        username: str) -> bool:
-        """保存或更新用户对某节点的凭据。"""
+                        username: str, password: str | None = None) -> bool:
+        """保存或更新用户对某节点的凭据。
+
+        password 语义：
+          - None        → 不改动已有密码
+          - ""（空串）  → 清除已有密码
+          - 非空字符串  → 替换为加密后的新密码
+        """
+        from neu_box_webui.master.services.crypto import encrypt_secret
+
         with self._conn() as conn:
             now = time.time()
             existing = conn.execute(
-                'SELECT id FROM user_credentials WHERE user_id=? AND node_name=?',
+                'SELECT id, password FROM user_credentials '
+                'WHERE user_id=? AND node_name=?',
                 (user_id, node_name)).fetchone()
             if existing:
-                conn.execute(
-                    'UPDATE user_credentials SET username=?, created_at=? WHERE id=?',
-                    (username, now, existing['id']))
+                if password is None:
+                    conn.execute(
+                        'UPDATE user_credentials '
+                        'SET username=?, updated_at=? WHERE id=?',
+                        (username, now, existing['id']))
+                else:
+                    token = encrypt_secret(password) if password else None
+                    conn.execute(
+                        'UPDATE user_credentials '
+                        'SET username=?, password=?, updated_at=? WHERE id=?',
+                        (username, token, now, existing['id']))
             else:
                 cid = uuid.uuid4().hex[:12]
+                token = encrypt_secret(password) if password else None
                 conn.execute(
-                    'INSERT INTO user_credentials (id, user_id, node_name, username, created_at) '
-                    'VALUES (?, ?, ?, ?, ?)',
-                    (cid, user_id, node_name, username, now))
+                    'INSERT INTO user_credentials '
+                    '(id, user_id, node_name, username, password, '
+                    ' created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    (cid, user_id, node_name, username, token, now, now))
             conn.commit()
             return True
 
+    def get_credential(self, user_id: str, node_name: str) -> dict | None:
+        """获取单条凭据（含加密密码字段，内部使用）。"""
+        with self._conn() as conn:
+            row = conn.execute(
+                'SELECT node_name, username, password, created_at, updated_at '
+                'FROM user_credentials WHERE user_id=? AND node_name=?',
+                (user_id, node_name)).fetchone()
+            return dict(row) if row else None
+
+    def get_credential_password(self, user_id: str, node_name: str) -> str | None:
+        """解密返回某条凭据的密码；未设置或解密失败返回 None。"""
+        from neu_box_webui.master.services.crypto import decrypt_secret
+
+        cred = self.get_credential(user_id, node_name)
+        if not cred or not cred.get('password'):
+            return None
+        return decrypt_secret(cred['password'])
+
     def get_credentials(self, user_id: str) -> list[dict]:
-        """获取用户所有已存节点凭据。"""
+        """获取用户所有已存节点凭据（不含密码，仅 has_password 标志）。"""
         with self._conn() as conn:
             rows = conn.execute(
-                'SELECT node_name, username, created_at '
+                'SELECT node_name, username, created_at, updated_at, password '
                 'FROM user_credentials WHERE user_id=? ORDER BY node_name',
                 (user_id,)).fetchall()
-            return [dict(r) for r in rows]
+            return [
+                {
+                    'node_name': r['node_name'],
+                    'username': r['username'],
+                    'created_at': r['created_at'],
+                    'updated_at': r['updated_at'],
+                    'has_password': bool(r['password']),
+                }
+                for r in rows
+            ]
 
     def delete_credential(self, user_id: str, node_name: str) -> bool:
         """删除用户对某节点的凭据。"""

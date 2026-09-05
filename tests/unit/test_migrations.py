@@ -27,7 +27,9 @@ from neu_box_webui.master.services.db import (
     [
         (
             MASTER_MIGRATIONS, MASTER_COLUMNS, MASTER_INDEXES,
-            (1, 2), [(1, "initial"), (2, "user_system")],
+            (1, 2, 3),
+            [(1, "initial"), (2, "user_system"),
+             (3, "node_credentials_password")],
         ),
     ],
 )

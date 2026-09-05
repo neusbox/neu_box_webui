@@ -7,16 +7,18 @@ WebUI 对**浏览器前端**（Vue SPA，构建产物在 `master/static/`）暴�
 > `NEU_BOX_URL`（见 neu_box 仓库 `docs/worker-api.md`）。WebUI 仅负责
 > 节点池编排、任务转发、实验记录与 Web 界面。
 
-**认证**：除 `/auth/login`、`/auth/me`、`/healthz`、静态资源外，所有接口要求
-session 登录（cookie）。
+**认证**：除 `/auth/login`、`/auth/register*`、`/auth/me`、`/healthz`、静态资源外，
+所有接口要求 session 登录（cookie）。
 
 **权限**：
-- 普通用户：查看/操作自己提交的任务（`user_id` 由服务端从 session 注入，
-  客户端传值无效），管理自己的实验与凭据。
+- 普通用户：查看/操作自己提交的任务（任务归属见「命令任务」），
+  管理自己的实验与节点凭据。
 - 管理员（`role=admin`）：额外可删任意任务、管理任意实验、增删节点
   （`/nodes/config/*`）、用户管理（`/admin/users*`）。
 - 任务日志（`/tasks/<id>/log`、`/experiments/log/<id>`）仅任务属主或管理员
   可看；设置 `NEU_BOX_LOGS_SHARED=1` 对全体登录用户开放。
+- 自助注册默认开放（`NEU_BOX_ALLOW_REGISTRATION=1`），仅能创建普通
+  用户；设 `0` 关闭。
 
 **API 版本**：`/healthz` 返回 `api_version`（当前 `2`）。
 仅破坏性变更（删字段、改语义）时 +1；新增字段/端点不升版本。
@@ -25,12 +27,26 @@ session 登录（cookie）。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| POST | `/auth/register` | 自助注册 `{username, password}`（普通用户角色，成功后自动登录）；开关关闭 403 |
+| GET | `/auth/register` | 注册开关状态 `{allowed}`（登录页据此显示/隐藏注册入口） |
 | POST | `/auth/login` | `{username, password}` → 建立 session；更新 `last_login_at`；停用账号拒绝 |
 | GET | `/auth/me` | 当前用户；未登录 401 |
 | POST | `/auth/logout` | 注销 |
 | PUT | `/auth/password` | `{old_password, new_password}` |
-| GET/POST | `/auth/credentials` | 各节点运行凭据 CRUD（仅本人） |
-| DELETE | `/auth/credentials/<node_name>` | 删除凭据（仅本人） |
+
+### 节点凭据（节点上的 OS 用户名 + 密码，仅本人）
+
+WebUI 用户名不一定等于节点 OS 用户名。每个用户可为每个节点维护自己的
+OS 账号；提交任务时以凭据用户名作为 worker 侧 `user_id`（未设置则用
+WebUI 用户名）。密码 Fernet 加密存于 master（密钥由 `SECRET_KEY` 派生），
+仅本人可查询，**不会发送给 worker**（供用户登录节点参考）。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/auth/credentials` | 列表（不含密码，仅 `has_password` 标志） |
+| PUT | `/auth/credentials/<node_name>` | 保存/更新 `{username, password?}`；password 缺省=不改，空串=清除 |
+| GET | `/auth/credentials/<node_name>/password` | 查看已存密码（明文，仅本人；未存则 `password: null`） |
+| DELETE | `/auth/credentials/<node_name>` | 删除凭据 |
 
 ## 节点
 
@@ -48,9 +64,14 @@ session 登录（cookie）。
 任务物理上在 worker 节点队列中，WebUI 原样转发；`task_submissions` 表
 （master 侧）记录提交历史，用于 dashboard 统计与日后审计。
 
+**任务归属（user_id）**：提交时服务端注入——该节点已配置凭据用户名则用
+凭据用户名，否则用 WebUI 用户名；客户端传值一律忽略。因此「我的任务」/
+删除/日志的属主判定 = 任务的 `user_id` ∈ {我的 WebUI 用户名, 我在这节点的
+凭据用户名}。
+
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/tasks` | 提交任务（202 + task_id）。`user_id` 由服务端从 session 注入，请求体中的值被忽略；同时写入 `task_submissions` |
+| POST | `/tasks` | 提交任务（202 + task_id）。`user_id` 按上文规则由服务端注入；同时写入 `task_submissions` |
 | GET | `/tasks?node_id=` | 队列快照（转发 worker；`&mine=1` 时服务端按 user_id 过滤） |
 | GET | `/tasks/mine?node_id=` | 单节点「我的任务」（转发 + 服务端按 user_id 过滤） |
 | GET | `/tasks/mine` | 跨节点聚合「我的任务」（并发拉取在线节点队列）：`{groups:[{node_id, node_name, node_status, tasks[]}], offline_nodes:[{node_id, node_name}], total}` |
@@ -91,7 +112,7 @@ session 登录（cookie）。
 
 ```json
 {"status":"ok","role":"master","api_version":2,
- "version":"0.1.0","schema_version":2}
+ "version":"0.1.0","schema_version":3}
 ```
 
 ## 与 worker 的兼容
