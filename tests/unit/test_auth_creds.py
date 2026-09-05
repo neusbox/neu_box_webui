@@ -85,8 +85,13 @@ def test_register_duplicate_username(env):
 
 def test_register_validation(env):
     client = env["client"]
+    # 2 位用户名合法（与管理员建号规则一致）
     assert client.post("/auth/register",
-                       json={"username": "ab", "password": "x1234"}
+                       json={"username": "li", "password": "x1234"}
+                       ).status_code == 201
+    # 1 位太短
+    assert client.post("/auth/register",
+                       json={"username": "a", "password": "x1234"}
                        ).status_code == 400
     assert client.post("/auth/register",
                        json={"username": "valid_name", "password": "123"}

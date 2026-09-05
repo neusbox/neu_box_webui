@@ -25,7 +25,7 @@ logger = logging.getLogger('master.auth')
 def _registration_allowed() -> bool:
     return env_text('NEU_BOX_ALLOW_REGISTRATION', '1') in ('1', 'true', 'yes')
 
-_USERNAME_RE = re.compile(r'^[A-Za-z0-9_.-]{3,32}$')
+_USERNAME_RE = re.compile(r'^[a-zA-Z0-9_.-]{2,32}$')
 # 节点 OS 用户名可以较短（如 "al"、"li"）；不允许单字符
 _NODE_USER_RE = re.compile(r'^[A-Za-z0-9_.-]{2,32}$')
 
@@ -128,7 +128,7 @@ def register():
     password = data.get('password') or ''
 
     if not _USERNAME_RE.match(username):
-        return {'error': '用户名需 3-32 位字母、数字、_、. 或 -'}, 400
+        return {'error': '用户名需 2-32 位字母、数字、_、. 或 -'}, 400
     if len(password) < 4 or len(password) > 128:
         return {'error': '密码长度需 4-128 位'}, 400
     if _db().get_user_by_username(username):

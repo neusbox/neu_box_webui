@@ -99,7 +99,7 @@ async function submit() {
         <div class="field">
           <label class="field-label">用户名</label>
           <input v-model="username" class="input"
-                 :placeholder="mode === 'register' ? '3-32 位字母、数字、_、. 或 -' : '输入用户名'"
+                 :placeholder="mode === 'register' ? '2-32 位字母、数字、_、. 或 -' : '输入用户名'"
                  autocomplete="username" autofocus>
         </div>
         <div class="field">
