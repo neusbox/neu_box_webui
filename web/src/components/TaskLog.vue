@@ -1,12 +1,13 @@
 <script setup>
 /**
  * 任务日志查看器：元数据 + 全量拉取（带进度）+ 导出/存实验。
+ * 排队中的任务无日志：只显示基本信息（位置/优先级/预计等待）。
  */
 import { computed, ref, watch } from 'vue'
 import Icon from './Icon.vue'
 import { api } from '../api'
 import { toast } from '../store'
-import { handleCR, statusLabel, formatTime, downloadText } from '../utils'
+import { handleCR, statusLabel, formatTime, downloadText, etaText } from '../utils'
 
 const props = defineProps({
   task: { type: Object, default: null },  // 任务元数据
@@ -23,6 +24,13 @@ let reloadSeq = 0
 async function load() {
   if (!props.task || !props.nodeId) {
     state.value = 'idle'
+    return
+  }
+  // 排队任务还没产生日志 → 不发起请求，面板只展示基本信息
+  if (props.task.status === 'queued') {
+    state.value = 'done'
+    logText.value = ''
+    errorMsg.value = ''
     return
   }
   const seq = ++reloadSeq
@@ -44,7 +52,8 @@ async function load() {
   }
 }
 
-watch(() => [props.task?.task_id, props.nodeId], () => { load() }, { immediate: true })
+// 状态变化（排队→运行/完成）时重新加载：排队不拉日志，开始后自动拉取
+watch(() => [props.task?.task_id, props.task?.status, props.nodeId], () => { load() }, { immediate: true })
 
 const progressPct = computed(() => {
   const { loaded, total } = progress.value
@@ -59,6 +68,7 @@ const progressText = computed(() => {
 
 const isFinished = computed(() =>
   !!props.task && (props.task.status === 'completed' || props.task.status === 'failed'))
+const isQueued = computed(() => !!props.task && props.task.status === 'queued')
 
 function exportLog() {
   if (!logText.value) return
@@ -83,10 +93,10 @@ defineExpose({ reload: load })
   <div class="log-panel card">
     <div class="card-head">
       <Icon name="terminal" :size="14" />
-      <span class="card-title">任务日志</span>
+      <span class="card-title">{{ isQueued ? '任务信息' : '任务日志' }}</span>
       <span v-if="task" class="card-sub mono">{{ task.task_id }}</span>
       <span class="grow" />
-      <button v-if="task" class="btn btn-ghost btn-icon" title="新页面打开（全宽查看）" @click="openInNewPage">
+      <button v-if="task && !isQueued" class="btn btn-ghost btn-icon" title="新页面打开（全宽查看）" @click="openInNewPage">
         <Icon name="external" :size="14" />
       </button>
       <button v-if="task" class="btn btn-ghost btn-icon" title="重新加载" @click="load">
@@ -99,8 +109,8 @@ defineExpose({ reload: load })
 
     <div v-if="!task" class="empty-state">
       <div class="icon">📋</div>
-      <p>点击队列中的任务查看日志</p>
-      <p class="small">普通用户仅可查看自己任务的日志</p>
+      <p>点击队列中的任务查看信息 / 日志</p>
+      <p class="small">普通用户仅可查看自己任务的信息与日志</p>
     </div>
 
     <template v-else>
@@ -113,6 +123,11 @@ defineExpose({ reload: load })
           <template v-if="task.devices && task.devices.length">（{{ task.devices.join(', ') }}）</template>
         </span>
         <span class="k">创建</span><span class="v">{{ formatTime(task.created_at) }}</span>
+        <template v-if="isQueued">
+          <span class="k">队列位置</span><span class="v">#{{ task.position ?? '?' }}</span>
+          <span class="k">优先级</span><span class="v">{{ task.priority ? '赶论文' : '普通' }}</span>
+          <span class="k">预计等待</span><span class="v">{{ etaText(task.eta) || '—' }}</span>
+        </template>
         <span class="k">状态</span>
         <span class="v">
           {{ statusLabel(task.status) }}
@@ -133,9 +148,15 @@ defineExpose({ reload: load })
         <p class="mt-8 text-danger">{{ errorMsg }}</p>
       </div>
 
+      <div v-else-if="isQueued" class="empty-state">
+        <div class="icon">⏳</div>
+        <p>任务在排队中</p>
+        <p class="small">开始后此处显示日志，可点「重新加载」刷新</p>
+      </div>
+
       <div v-else class="log-body">{{ logText || '(无输出)' }}</div>
 
-      <div v-if="state === 'done'" class="log-toolbar">
+      <div v-if="state === 'done' && !isQueued" class="log-toolbar">
         <span class="text-3 small grow">{{ logText.length.toLocaleString() }} 字符</span>
         <button v-if="task" class="btn btn-sm" title="在全宽新页面中查看日志"
                 @click="openInNewPage()">

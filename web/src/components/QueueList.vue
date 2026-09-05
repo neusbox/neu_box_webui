@@ -3,7 +3,7 @@
  * 任务队列列表。
  * - 行: 位置/状态 · 用户 · 命令 · ETA · 操作（标注/重跑）
  * - 勾选 → 批量删除
- * - 点击完成/运行中行 → 查看日志
+ * - 点击任意行 → 右侧显示基本信息（运行/已完成/失败另可看日志）
  * - markedTasks: 本地 ★ 标注（localStorage）
  */
 import { computed } from 'vue'
@@ -21,12 +21,9 @@ const props = defineProps({
 })
 const emit = defineEmits(['select-task', 'toggle-check', 'check-all', 'toggle-mark', 'rerun'])
 
-// 仅 运行中/已完成/失败 可点击看日志（与旧版行为一致）
-function isClickable(task) {
-  return ['running', 'completed', 'failed'].includes(task.status)
-}
+// 所有行均可点击 → 右侧面板显示基本信息（排队任务无日志，只显示信息）
 function onRowClick(task) {
-  if (isClickable(task)) emit('select-task', task)
+  emit('select-task', task)
 }
 
 const checkedCount = computed(() => props.checked.length)
@@ -40,9 +37,8 @@ const checkedCount = computed(() => props.checked.length)
     </div>
 
     <div v-for="task in tasks" :key="(task.node_id || 'n') + '/' + task.task_id"
-         class="queue-row"
+         class="queue-row clickable"
          :class="{
-           clickable: isClickable(task),
            selected: checked.includes(task.task_id),
          }"
          @click="onRowClick(task)">
