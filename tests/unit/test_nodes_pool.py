@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 import requests
 
@@ -68,6 +69,36 @@ def test_failed_status_query_exposes_offline_reason(monkeypatch):
     summary = pool.get_all_nodes()[0]
     assert summary["status"] == "offline"
     assert summary["status_error"] == "connection refused"
+
+
+def test_query_all_nodes_status_queries_concurrently(monkeypatch):
+    """慢节点不能串行拖死状态查询（总耗时 ≈ 最慢单节点，而非 N × 超时）。
+
+    两个慢节点各睡 1.2s：串行 ≈ 2.4s，并发 ≈ 1.2s。
+    """
+    pool = Nodes_Pool()
+    slow1 = Nodes("slow1", "slow1", "127.0.0.1", 59076)
+    slow2 = Nodes("slow2", "slow2", "127.0.0.1", 59077)
+    fast = Nodes("fast", "fast", "127.0.0.1", 59078)
+    pool.add_node(slow1)
+    pool.add_node(slow2)
+    pool.add_node(fast)
+
+    def fake_request(method, url, **kwargs):
+        if ":59076" in url or ":59077" in url:
+            time.sleep(1.2)          # 模拟慢节点
+        return _StatusResponse()
+
+    monkeypatch.setattr(pool, "_request", fake_request)
+
+    t0 = time.monotonic()
+    results = pool.query_all_nodes_status()
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 2.0, f"应并发查询，实际耗时 {elapsed:.2f}s（串行应≈2.4s）"
+    assert results["slow1"]["status"] == "online"
+    assert results["slow2"]["status"] == "online"
+    assert results["fast"]["status"] == "online"
 
 
 def test_invalid_config_read_keeps_existing_nodes(

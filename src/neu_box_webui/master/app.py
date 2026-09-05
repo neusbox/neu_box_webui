@@ -259,7 +259,10 @@ def main(argv: list[str] | None = None) -> int:
         pool.start_polling(interval=env_int("NEU_BOX_POLL_INTERVAL", 15, "poll_interval"))
         listen = args.listen or env_text("NEU_BOX_LISTEN", "0.0.0.0", "listen")
         port = args.port or env_int("NEU_BOX_PORT", 25565, "port")
-        threads = env_int("NEU_BOX_HTTP_THREADS", 8)
+        # 线程池要能容纳：前台多标签页轮询 + 手动实时查询 + 转发等待。
+        # 节点状态热路径已改为读缓存（不占 worker I/O），这里给足并发余量，
+        # 避免慢/挂起节点把线程占满导致整个 WebUI 卡死（queue depth 堆积）。
+        threads = env_int("NEU_BOX_HTTP_THREADS", 16)
         logger.info("Master 正在监听 %s:%s", listen, port)
         try:
             waitress_serve(app, host=listen, port=port, threads=threads)

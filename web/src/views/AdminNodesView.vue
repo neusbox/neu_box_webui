@@ -20,7 +20,8 @@ async function load() {
   try {
     const [cfg, live] = await Promise.all([
       api.get('/nodes/config'),
-      api.post('/nodes/get_all_nodes', {}).catch(() => ({ nodes: [] })),
+      // 管理页低频加载且管理员期望实时状态 → 主动并发刷新一次
+      api.post('/nodes/get_all_nodes', { refresh: true }).catch(() => ({ nodes: [] })),
     ])
     configNodes.value = cfg.nodes || []
     liveNodes.value = live.nodes || []

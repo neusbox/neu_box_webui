@@ -129,9 +129,17 @@ def remove_config_node():
 @login_required
 def get_all_nodes():
     """返回所有已注册节点的列表及当前状态，供前端选择器使用。
-    每次请求时主动向所有 worker 查询一次实时状态，确保前端拿到最新数据。"""
+
+    默认返回后台轮询（每 15s，并发）维护的缓存——热路径不产生
+    worker I/O，避免慢/挂起节点把 HTTP 线程拖住导致整个 WebUI
+    卡死；请求体或 query 带 refresh=true 时做一次实时并发查询
+    （手动「刷新」按钮）。
+    """
+    data = flask.request.get_json(silent=True) or {}
+    want_refresh = bool(data.get('refresh')) or flask.request.args.get('refresh') == '1'
     pool = Nodes_Pool.get_nodes_pool()
-    pool.query_all_nodes_status()
+    if want_refresh:
+        pool.query_all_nodes_status()
     nodes_info = pool.get_all_nodes()
     return {'nodes': nodes_info}, 200
 

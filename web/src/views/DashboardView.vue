@@ -5,16 +5,16 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { marked } from 'marked'
 import { api } from '../api'
-import { statusLabel, formatTime } from '../utils'
+import { statusLabel, formatTime, setPolling } from '../utils'
 
 const nodes = ref([])
 const groups = ref([])          // 我的任务（按节点分组）
 const offlineNodes = ref([])
 const notice = ref('')
 
-async function loadNodes() {
+async function loadNodes(live = false) {
   try {
-    const data = await api.post('/nodes/get_all_nodes')
+    const data = await api.post('/nodes/get_all_nodes', live ? { refresh: true } : {})
     nodes.value = data.nodes || []
   } catch { /* 保留旧值 */ }
 }
@@ -55,16 +55,16 @@ const activeTasks = computed(() =>
     .map(t => ({ ...t, node_name: g.node_name }))))
 
 let timer = null
-function loadAll() {
-  loadNodes()
+function loadAll(live = false) {
+  loadNodes(live)
   loadMyTasks()
 }
 onMounted(() => {
   loadNotice()
-  loadAll()
-  timer = setInterval(loadAll, 15000)
+  loadAll(true)
+  timer = setPolling(() => loadAll(false), 15000)
 })
-onBeforeUnmount(() => { if (timer) clearInterval(timer) })
+onBeforeUnmount(() => { if (timer) timer() })
 </script>
 
 <template>
@@ -75,7 +75,7 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer) })
         <div class="page-desc">集群状态与我的任务</div>
       </div>
       <div class="page-actions">
-        <button class="btn" @click="loadAll">刷新</button>
+        <button class="btn" @click="loadAll(true)">刷新</button>
         <router-link class="btn btn-primary" to="/tasks">
           提交任务 →
         </router-link>

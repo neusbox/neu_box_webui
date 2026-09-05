@@ -14,7 +14,7 @@ import Stepper from '../components/Stepper.vue'
 import TaskLog from '../components/TaskLog.vue'
 import { api } from '../api'
 import { authRO, toast } from '../store'
-import { joinCommandLines, memToGB, statusLabel } from '../utils'
+import { joinCommandLines, memToGB, setPolling, statusLabel } from '../utils'
 
 const user = computed(() => authRO.user)
 
@@ -25,10 +25,10 @@ const nodesBusy = ref(false)
 const sandboxes = ref([])
 const deviceIds = ref([])
 
-async function loadNodes() {
+async function loadNodes(live = false) {
   nodesBusy.value = true
   try {
-    const data = await api.post('/nodes/get_all_nodes', {})
+    const data = await api.post('/nodes/get_all_nodes', live ? { refresh: true } : {})
     nodes.value = data.nodes || []
     const cur = nodes.value.find(n => n.node_id === selectedNodeId.value)
     if (!cur) {
@@ -351,18 +351,20 @@ function manageNodes() {
 }
 
 // ── 轮询 ────────────────────────────────────────────────────
+// 后台轮询用节点状态缓存（不产生 worker I/O），手动「刷新」才实时查询；
+// 标签页隐藏时自动暂停（setPolling），避免多标签页请求堆积拖垮 master
 let nodesTimer = null
 let queueTimer = null
 onMounted(() => {
-  loadNodes()
+  loadNodes(true)
   loadSandboxes()
   loadQueue()
-  nodesTimer = setInterval(loadNodes, 60000)
-  queueTimer = setInterval(() => loadQueue(), 8000)
+  nodesTimer = setPolling(() => loadNodes(false), 60000)
+  queueTimer = setPolling(() => loadQueue(), 8000)
 })
 onBeforeUnmount(() => {
-  if (nodesTimer) clearInterval(nodesTimer)
-  if (queueTimer) clearInterval(queueTimer)
+  if (nodesTimer) nodesTimer()
+  if (queueTimer) queueTimer()
 })
 </script>
 
@@ -386,7 +388,7 @@ onBeforeUnmount(() => {
             :device-ids="deviceIds"
             :sandboxes="sandboxes"
             @select="selectNode"
-            @refresh="loadNodes"
+            @refresh="() => loadNodes(true)"
             @manage="manageNodes"
             @update:device-ids="v => deviceIds = v"
           />

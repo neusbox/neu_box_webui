@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
@@ -250,12 +251,31 @@ class Nodes_Pool:
             return {'error': '无法连接到节点', 'details': details}
 
     def query_all_nodes_status(self) -> dict[str, dict]:
-        """批量查询所有节点状态"""
-        results = {}
+        """并发批量查询所有节点状态。
+
+        逐节点独立超时（_query_node_status 内 timeout=5），总耗时
+        上限 ≈ 单节点超时，而不是 N × 5s —— 避免慢节点串行拖死
+        HTTP 线程（waitress 线程池耗尽 → 整个 WebUI 卡住）。
+        """
         with self._nodes_lock:
-            nodes = list(self.nodes.items())
-        for node_id, node in nodes:
-            results[node_id] = self._query_node_status(node)
+            nodes = list(self.nodes.values())
+        return self._query_nodes_status(nodes)
+
+    def _query_nodes_status(self, nodes: list) -> dict[str, dict]:
+        """并发查询给定节点列表的状态，返回 {node_id: result}。"""
+        if not nodes:
+            return {}
+        if len(nodes) == 1:
+            return {nodes[0].node_id: self._query_node_status(nodes[0])}
+        results: dict[str, dict] = {}
+        with ThreadPoolExecutor(max_workers=min(8, len(nodes)),
+                                thread_name_prefix='node-status') as ex:
+            futures = {
+                ex.submit(self._query_node_status, node): node.node_id
+                for node in nodes
+            }
+            for fut in as_completed(futures):
+                results[futures[fut]] = fut.result()
         return results
 
     # ── 定期轮询 ───────────────────────────────────────────────
@@ -294,12 +314,11 @@ class Nodes_Pool:
             time.sleep(sleep_time)
 
     def _poll_all_nodes(self):
-        """向所有节点请求 /status 并更新本地记录。每次先同步 nodes.json 中的节点列表。"""
+        """向所有节点并发请求 /status 并更新本地记录。每次先同步 nodes.json 中的节点列表。"""
         self._sync_nodes_from_config()
         with self._nodes_lock:
             nodes = list(self.nodes.values())
-        for node in nodes:
-            self._query_node_status(node)
+        self._query_nodes_status(nodes)
 
     # ── 通用转发 ────────────────────────────────────────────────
 
