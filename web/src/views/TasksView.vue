@@ -65,10 +65,10 @@ async function loadSandboxes() {
 
 // ── 提交表单 ────────────────────────────────────────────────
 const form = reactive({
-  cpu: 0,
-  memory: 0,
+  cpu: 20,
+  memory: 20,
   memUnit: 'GB',
-  deviceNum: 0,
+  deviceNum: 1,
   priority: 0,
   estTime: '',
   command: '',
