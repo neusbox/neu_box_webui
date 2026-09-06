@@ -19,7 +19,15 @@ const state = ref('idle')  // idle | loading | done | error
 const logText = ref('')
 const errorMsg = ref('')
 const progress = ref({ loaded: 0, total: 0 })
+const logBody = ref(null)
 let reloadSeq = 0
+
+// 日志加载完成后滚动到末尾（最新输出）
+function scrollLogToEnd() {
+  requestAnimationFrame(() => {
+    if (logBody.value) logBody.value.scrollTop = logBody.value.scrollHeight
+  })
+}
 
 async function load() {
   if (!props.task || !props.nodeId) {
@@ -45,6 +53,7 @@ async function load() {
     if (seq !== reloadSeq) return
     logText.value = handleCR(text)
     state.value = 'done'
+    scrollLogToEnd()
   } catch (e) {
     if (seq !== reloadSeq) return
     errorMsg.value = e.message
@@ -164,7 +173,7 @@ defineExpose({ reload: load })
         <p class="small">非命令任务，无日志；终端退出或队列中删除时释放资源</p>
       </div>
 
-      <div v-else class="log-body">{{ logText || '(无输出)' }}</div>
+      <div v-else ref="logBody" class="log-body">{{ logText || '(无输出)' }}</div>
 
       <div v-if="state === 'done' && !isQueued && !isSandbox" class="log-toolbar">
         <span class="text-3 small grow">{{ logText.length.toLocaleString() }} 字符</span>

@@ -25,8 +25,22 @@ const state = ref('loading')       // loading | done | error
 const errorMsg = ref('')
 const progress = ref({ loaded: 0, total: 0 })
 const autoRefresh = ref(true)
+const logBody = ref(null)
 let seq = 0
 let timer = null
+
+// 滚动跟随：首次加载滚到末尾；之后仅在用户已在底部时才跟随，
+// 翻看历史日志时不被自动刷新拽下去
+function nearBottom() {
+  const el = logBody.value
+  return !el || el.scrollHeight - el.scrollTop - el.clientHeight < 48
+}
+function scrollToEnd() {
+  requestAnimationFrame(() => {
+    const el = logBody.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
 
 async function loadMeta() {
   try {
@@ -50,8 +64,10 @@ async function loadLog() {
       (p) => { if (s === seq) progress.value = p },
     )
     if (s !== seq) return
+    const follow = nearBottom()  // 首次加载时 logBody 尚未渲染 → true
     logText.value = handleCR(text)
     state.value = 'done'
+    if (follow) scrollToEnd()
   } catch (e) {
     if (s !== seq) return
     errorMsg.value = e.message
@@ -179,7 +195,7 @@ function exportLog() {
         <p class="small text-3">仅任务本人或管理员可查看日志</p>
       </div>
 
-      <div v-else class="log-body">
+      <div v-else ref="logBody" class="log-body">
         <pre>{{ logText || '(无输出)' }}</pre>
       </div>
 
