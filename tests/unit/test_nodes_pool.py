@@ -49,8 +49,36 @@ def test_worker_http_session_ignores_environment_proxies(monkeypatch):
     pool = Nodes_Pool()
 
     session = pool._get_http_session()
+    try:
+        assert session.trust_env is False
+    finally:
+        session.close()
 
+
+def test_worker_request_closes_short_lived_session(monkeypatch):
+    """线程池任务结束后必须确定关闭连接池，不能积累 CLOSE_WAIT。"""
+    pool = Nodes_Pool()
+    response = object()
+
+    class FakeSession:
+        trust_env = True
+        closed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.closed = True
+
+        def request(self, *_args, **_kwargs):
+            return response
+
+    session = FakeSession()
+    monkeypatch.setattr(requests, "Session", lambda: session)
+
+    assert pool._request("GET", "http://127.0.0.1/status") is response
     assert session.trust_env is False
+    assert session.closed is True
 
 
 def test_failed_status_query_exposes_offline_reason(monkeypatch):

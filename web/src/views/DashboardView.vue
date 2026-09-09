@@ -56,8 +56,7 @@ const activeTasks = computed(() =>
 
 let timer = null
 function loadAll(live = false) {
-  loadNodes(live)
-  loadMyTasks()
+  return Promise.all([loadNodes(live), loadMyTasks()])
 }
 onMounted(() => {
   loadNotice()

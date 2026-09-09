@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
@@ -262,6 +263,28 @@ def test_my_tasks_aggregate(env):
     assert [t["task_id"] for t in group["tasks"]] == ["t-alice"]
     assert [s["task_id"] for s in group["sandboxes"]] == ["sbx_alice_43210.slice"]
     assert data["offline_nodes"] == []
+
+
+def test_queue_and_sandbox_requests_run_concurrently(env):
+    """慢 Worker 上的两个队列请求不能串行占用 Web 线程。"""
+    client, worker = env["client"], env["worker"]
+    _login(client, "alice")
+    original_request = worker.request
+    both_started = threading.Barrier(2)
+
+    def synchronized_request(method, url, **kwargs):
+        path = url.split("://", 1)[1].split("/", 1)[1]
+        if method == "GET" and path in {"tasks", "sandbox/list"}:
+            both_started.wait(timeout=1)
+        return original_request(method, url, **kwargs)
+
+    Nodes_Pool.get_nodes_pool()._request = synchronized_request
+
+    resp = client.get(f"/tasks/mine?node_id={NODE_ID}")
+
+    assert resp.status_code == 200
+    assert len(resp.get_json()["queue"]) == 1
+    assert len(resp.get_json()["sandboxes"]) == 1
 
 
 # ═══════════════════════════════════════════════════════════════

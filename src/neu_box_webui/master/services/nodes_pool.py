@@ -69,19 +69,19 @@ class Nodes_Pool:
         self._config_path = str(nodes_config_path())
         self._nodes_lock = threading.RLock()
         self._sync_lock = threading.Lock()
-        self._http_local = threading.local()
 
     def _get_http_session(self) -> requests.Session:
-        """每个线程复用独立 Session，节点控制面请求不继承系统代理。"""
-        session = getattr(self._http_local, 'session', None)
-        if session is None:
-            session = requests.Session()
-            session.trust_env = False
-            self._http_local.session = session
+        """创建不继承系统代理的节点控制面 Session。"""
+        session = requests.Session()
+        session.trust_env = False
         return session
 
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
-        return self._get_http_session().request(method, url, **kwargs)
+        # 状态/队列查询会运行在短生命周期线程池中；Session 若绑定到
+        # thread-local，线程退出后连接池不会被确定关闭，最终积累大量
+        # CLOSE_WAIT 和文件描述符。响应默认非 stream，退出时可安全关闭。
+        with self._get_http_session() as session:
+            return session.request(method, url, **kwargs)
 
     @classmethod
     def get_nodes_pool(cls) -> 'Nodes_Pool':

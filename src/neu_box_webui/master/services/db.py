@@ -81,6 +81,11 @@ class Database:
             REQUIRED_COLUMNS,
             REQUIRED_INDEXES,
         )
+        # WAL 是数据库级持久设置，只在单线程启动阶段配置一次。
+        # 若在每个请求的新连接上重复执行，并发鉴权会争抢模式切换锁，
+        # 最终占满整个 Waitress 线程池。
+        with sqlite3.connect(self._db_path, timeout=5) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
 
     @classmethod
     def get_instance(cls) -> 'Database':
@@ -91,8 +96,8 @@ class Database:
     @contextmanager
     def _conn(self):
         """每次操作创建独立连接，用完自动关闭。"""
-        conn = sqlite3.connect(self._db_path)
-        conn.execute("PRAGMA journal_mode=WAL")
+        conn = sqlite3.connect(self._db_path, timeout=5)
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.row_factory = sqlite3.Row
         try:

@@ -1,9 +1,17 @@
 /** 间隔轮询：标签页隐藏时自动暂停，重新可见时立即拉一次。
  *  返回清理函数（替代裸 setInterval，多标签页时减少无效请求堆积）。 */
 export function setPolling(fn, ms) {
-  const tick = () => { if (!document.hidden) fn() }
+  let running = false
+  const tick = () => {
+    if (document.hidden || running) return
+    running = true
+    Promise.resolve()
+      .then(fn)
+      .catch(() => { /* 具体加载函数负责展示错误 */ })
+      .finally(() => { running = false })
+  }
   const id = setInterval(tick, ms)
-  const onVisible = () => { if (!document.hidden) fn() }
+  const onVisible = () => { if (!document.hidden) tick() }
   document.addEventListener('visibilitychange', onVisible)
   return () => {
     clearInterval(id)

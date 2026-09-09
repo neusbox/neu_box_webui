@@ -146,6 +146,29 @@ def _sandbox_rows(node_id: str, labels: set[str] | None = None) -> list[dict]:
     return rows
 
 
+def _queue_snapshot(node_id: str, labels: set[str] | None = None,
+                    timeout: int = 10):
+    """并发读取任务和终端沙盒，避免一个轮询请求串行等待两次超时。"""
+    with ThreadPoolExecutor(max_workers=2,
+                            thread_name_prefix='node-queue') as executor:
+        tasks_future = executor.submit(
+            _forward, node_id, '/tasks', timeout=timeout,
+        )
+        sandboxes_future = executor.submit(_sandbox_rows, node_id, labels)
+        resp = tasks_future.result()
+        payload = resp.json()
+        sandboxes = sandboxes_future.result()
+
+    if isinstance(payload, dict) and 'queue' in payload:
+        if labels is not None:
+            payload['queue'] = [
+                task for task in payload['queue']
+                if task.get('user_id') in labels
+            ]
+        payload['sandboxes'] = sandboxes
+    return resp, payload, sandboxes
+
+
 def _sandbox_owners(node_id: str) -> dict[str, str]:
     """节点上所有沙盒的 name → owner 映射（删除归属校验用）。"""
     try:
@@ -243,23 +266,12 @@ def list_tasks():
     if not node_id:
         return {'error': 'node_id 参数必填'}, 400
 
+    labels = _my_labels(_node_name(node_id)) \
+        if request.args.get('mine') == '1' else None
     try:
-        resp = _forward(node_id, '/tasks')
-        payload = resp.json()
+        resp, payload, _ = _queue_snapshot(node_id, labels)
     except ValueError as e:
         return {'error': f'{e}。请检查是否选择了正确的节点'}, 404
-
-    if request.args.get('mine') == '1' and isinstance(payload, dict) \
-            and 'queue' in payload:
-        labels = _my_labels(_node_name(node_id))
-        payload['queue'] = [
-            t for t in payload['queue'] if t.get('user_id') in labels
-        ]
-    # 终端沙盒同样占用节点资源，合并展示（mine=1 时仅显示自己的）
-    if isinstance(payload, dict) and 'queue' in payload:
-        labels = _my_labels(_node_name(node_id)) \
-            if request.args.get('mine') == '1' else None
-        payload['sandboxes'] = _sandbox_rows(node_id, labels)
     return payload, resp.status_code
 
 
@@ -278,17 +290,11 @@ def list_my_tasks():
     node_id = (request.args.get('node_id') or '').strip()
 
     if node_id:
+        labels = _my_labels(_node_name(node_id))
         try:
-            resp = _forward(node_id, '/tasks')
-            payload = resp.json()
+            resp, payload, _ = _queue_snapshot(node_id, labels)
         except ValueError as e:
             return {'error': f'{e}。请检查是否选择了正确的节点'}, 404
-        if isinstance(payload, dict) and 'queue' in payload:
-            labels = _my_labels(_node_name(node_id))
-            payload['queue'] = [
-                t for t in payload['queue'] if t.get('user_id') in labels
-            ]
-            payload['sandboxes'] = _sandbox_rows(node_id, labels)
         return payload, resp.status_code
 
     # 跨节点聚合：并发拉取在线节点，单节点失败不影响其他节点
@@ -303,17 +309,16 @@ def list_my_tasks():
 
     def _fetch(node: dict) -> dict | None:
         try:
-            resp = pool.forward_get_to_node(node['node_id'], '/tasks', timeout=10)
-            payload = resp.json() if resp.ok else {}
-            queue = payload.get('queue', []) if isinstance(payload, dict) else []
             labels = _labels_for(user, node['name'])
-            mine = [t for t in queue if t.get('user_id') in labels]
-            sandboxes = _sandbox_rows(node['node_id'], labels)
+            resp, payload, sandboxes = _queue_snapshot(node['node_id'], labels)
+            if not resp.ok:
+                payload = {}
+            queue = payload.get('queue', []) if isinstance(payload, dict) else []
             return {
                 'node_id': node['node_id'],
                 'node_name': node['name'],
                 'node_status': 'online',
-                'tasks': mine,
+                'tasks': queue,
                 'sandboxes': sandboxes,
             }
         except ValueError:
