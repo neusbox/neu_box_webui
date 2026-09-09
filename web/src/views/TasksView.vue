@@ -172,40 +172,58 @@ const queue = ref([])           // 展平后的任务行
 const queueLoading = ref(false)
 const showNodeCol = ref(false)
 const checked = ref([])
+let queuePromise = null
+let queuePending = false
 
 async function loadQueue(force = false) {
+  // Worker 较慢时禁止 8s 定时器叠加请求；交互触发只补跑最新一轮。
+  if (queuePromise) {
+    if (force) queuePending = true
+    return queuePromise
+  }
   if (queueMode.value === 'all' && !selectedNodeId.value) {
     queue.value = []
     return
   }
-  queueLoading.value = true
+  queuePromise = (async () => {
+    queueLoading.value = true
+    try {
+      if (queueMode.value === 'mine' && !selectedNodeId.value) {
+        // 跨节点聚合（含各节点自己的终端沙盒）
+        const data = await api.get('/tasks/mine')
+        showNodeCol.value = true
+        queue.value = (data.groups || []).flatMap(g =>
+          [...(g.sandboxes || []), ...g.tasks].map(t =>
+            ({ ...t, node_name: g.node_name, node_id: g.node_id })))
+      } else if (queueMode.value === 'mine') {
+        const data = await api.get(`/tasks/mine?node_id=${encodeURIComponent(selectedNodeId.value)}`)
+        showNodeCol.value = false
+        queue.value = [...(data.sandboxes || []), ...(data.queue || [])]
+      } else {
+        const data = await api.get(`/tasks?node_id=${encodeURIComponent(selectedNodeId.value)}`)
+        showNodeCol.value = false
+        queue.value = [...(data.sandboxes || []), ...(data.queue || [])]
+      }
+      checked.value = []
+      // 右侧面板打开的任务同步最新队列数据（排队→运行 后自动切到日志）
+      if (logTask.value) {
+        const fresh = queue.value.find(t => t.task_id === logTask.value.task_id)
+        if (fresh) logTask.value = { ...fresh }
+      }
+    } catch (e) {
+      toast(e.message, 'error')
+    } finally {
+      queueLoading.value = false
+    }
+  })()
   try {
-    if (queueMode.value === 'mine' && !selectedNodeId.value) {
-      // 跨节点聚合（含各节点自己的终端沙盒）
-      const data = await api.get('/tasks/mine')
-      showNodeCol.value = true
-      queue.value = (data.groups || []).flatMap(g =>
-        [...(g.sandboxes || []), ...g.tasks].map(t =>
-          ({ ...t, node_name: g.node_name, node_id: g.node_id })))
-    } else if (queueMode.value === 'mine') {
-      const data = await api.get(`/tasks/mine?node_id=${encodeURIComponent(selectedNodeId.value)}`)
-      showNodeCol.value = false
-      queue.value = [...(data.sandboxes || []), ...(data.queue || [])]
-    } else {
-      const data = await api.get(`/tasks?node_id=${encodeURIComponent(selectedNodeId.value)}`)
-      showNodeCol.value = false
-      queue.value = [...(data.sandboxes || []), ...(data.queue || [])]
-    }
-    checked.value = []
-    // 右侧面板打开的任务同步最新队列数据（排队→运行 后自动切到日志）
-    if (logTask.value) {
-      const fresh = queue.value.find(t => t.task_id === logTask.value.task_id)
-      if (fresh) logTask.value = { ...fresh }
-    }
-  } catch (e) {
-    toast(e.message, 'error')
+    return await queuePromise
   } finally {
-    queueLoading.value = false
+    queuePromise = null
+    if (queuePending) {
+      queuePending = false
+      void loadQueue()
+    }
   }
 }
 
@@ -501,7 +519,7 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- 队列 -->
-        <div class="card mt-16">
+        <div class="card mt-16 queue-card">
           <div class="card-head">
             <div class="tabs">
               <button class="tab" :class="{ active: queueMode === 'mine' }"
@@ -623,19 +641,60 @@ onBeforeUnmount(() => {
   grid-template-columns: 330px minmax(0, 1fr);
   gap: 16px;
   align-items: start;
+  height: calc(100vh - 140px);
+  min-height: 480px;
 }
 .tasks-layout.with-log {
   grid-template-columns: 330px minmax(0, 1fr) 460px;
 }
-.col-log {
-  position: sticky;
-  top: 24px;
-  height: calc(100vh - 48px);
-  min-height: 480px;
+/* 左栏节点卡：内容超限时卡内滚动，不拉长页面 */
+.tasks-layout > .card {
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  min-height: 0;
 }
-.col-mid { min-width: 0; display: flex; flex-direction: column; }
+.tasks-layout > .card > .card-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* 中栏：表单（自然高度）+ 队列（填满剩余） */
+.col-mid {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.col-mid > .card { flex: 0 0 auto; }
+.col-mid > .card.queue-card {
+  flex: 1 1 auto;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+}
+/* 队列列表在滚动框内，不向下无限延长 */
+.queue-card > .card-body.flush {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* 右栏日志：填满栏高 */
+.col-log {
+  position: static;
+  height: 100%;
+  min-height: 0;
+}
 @media (max-width: 1280px) {
-  .tasks-layout, .tasks-layout.with-log { grid-template-columns: 300px minmax(0, 1fr); }
-  .col-log { grid-column: 1 / -1; position: static; height: 640px; }
+  .tasks-layout, .tasks-layout.with-log {
+    grid-template-columns: 300px minmax(0, 1fr);
+    height: auto;
+    min-height: 0;
+  }
+  .tasks-layout > .card { max-height: 70vh; }
+  .col-mid { height: auto; }
+  .col-mid > .card.queue-card { max-height: 60vh; }
+  .col-log { grid-column: 1 / -1; height: 640px; }
 }
 </style>
