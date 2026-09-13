@@ -8,10 +8,13 @@ import importlib.resources
 import os
 import re
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
+
+from neu_box_webui.database.sqlite_runtime import sqlite_connection
 
 
 _MIGRATION_RE = re.compile(
@@ -86,12 +89,13 @@ def discover_migrations(package: str) -> tuple[Migration, ...]:
     return tuple(migrations)
 
 
-def _connect(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(path, isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
+@contextmanager
+def _connect(path: Path):
+    with sqlite_connection(path, isolation_level=None) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=5000")
+        yield conn
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -416,16 +420,12 @@ def backup_database(
     temporary = destination.with_suffix(".db.tmp")
     if temporary.exists():
         temporary.unlink()
-    source = _connect(source_path)
-    target = sqlite3.connect(temporary)
-    try:
-        source.backup(target)
-        target.commit()
-        result = str(target.execute("PRAGMA integrity_check").fetchone()[0])
-        if result != "ok":
-            raise MigrationError(f"备份完整性检查失败: {result}")
-    finally:
-        target.close()
-        source.close()
+    with _connect(source_path) as source:
+        with sqlite_connection(temporary) as target:
+            source.backup(target)
+            target.commit()
+            result = str(target.execute("PRAGMA integrity_check").fetchone()[0])
+            if result != "ok":
+                raise MigrationError(f"备份完整性检查失败: {result}")
     os.replace(temporary, destination)
     return destination

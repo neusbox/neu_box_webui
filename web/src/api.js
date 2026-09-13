@@ -12,8 +12,29 @@ export class ApiError extends Error {
 }
 
 async function request(path, options = {}) {
-  const { method = 'GET', body, headers = {}, raw = false, signal } = options
-  const init = { method, headers: { ...headers }, signal }
+  const {
+    method = 'GET', body, headers = {}, raw = false, signal, timeout = 0,
+  } = options
+  let timeoutId = null
+  let timedOut = false
+  let forwardAbort = null
+  let requestSignal = signal
+
+  if (timeout > 0) {
+    const controller = new AbortController()
+    requestSignal = controller.signal
+    if (signal) {
+      forwardAbort = () => controller.abort(signal.reason)
+      if (signal.aborted) forwardAbort()
+      else signal.addEventListener('abort', forwardAbort, { once: true })
+    }
+    timeoutId = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, timeout)
+  }
+
+  const init = { method, headers: { ...headers }, signal: requestSignal }
   if (body !== undefined) {
     if (!(body instanceof FormData)) {
       // 注意：必须写到 init.headers（init 的独立拷贝），
@@ -25,27 +46,42 @@ async function request(path, options = {}) {
     }
   }
 
-  const resp = await fetch(path, init)
+  try {
+    const resp = await fetch(path, init)
 
-  if (resp.status === 401) {
-    // 登录态失效：刷新页面触发路由守卫重新检查
-    if (!location.pathname.startsWith('/login')) {
-      window.dispatchEvent(new CustomEvent('neu:unauthorized'))
+    if (resp.status === 401) {
+      // 登录态失效：刷新页面触发路由守卫重新检查
+      if (!location.pathname.startsWith('/login')) {
+        window.dispatchEvent(new CustomEvent('neu:unauthorized'))
+      }
     }
-  }
 
-  if (raw) {
-    if (!resp.ok) throw new ApiError(resp.status, `HTTP ${resp.status}`, null)
-    return resp
-  }
+    if (raw) {
+      if (!resp.ok) throw new ApiError(resp.status, `HTTP ${resp.status}`, null)
+      return resp
+    }
 
-  let payload = null
-  try { payload = await resp.json() } catch { /* 空响应体 */ }
-  if (!resp.ok) {
-    const message = (payload && payload.error) || `HTTP ${resp.status}`
-    throw new ApiError(resp.status, message, payload)
+    let payload = null
+    try {
+      payload = await resp.json()
+    } catch (error) {
+      // AbortError 必须交给外层转换为超时；其他错误表示响应体为空或非 JSON。
+      if (error && error.name === 'AbortError') throw error
+    }
+    if (!resp.ok) {
+      const message = (payload && payload.error) || `HTTP ${resp.status}`
+      throw new ApiError(resp.status, message, payload)
+    }
+    return payload
+  } catch (error) {
+    if (timedOut && error && error.name === 'AbortError') {
+      throw new ApiError(0, '请求超时', null)
+    }
+    throw error
+  } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId)
+    if (signal && forwardAbort) signal.removeEventListener('abort', forwardAbort)
   }
-  return payload
 }
 
 export const api = {

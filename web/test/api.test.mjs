@@ -48,4 +48,30 @@ c = calls.at(-1)
 assert.equal(c.init.body, fd)
 assert.equal(c.init.headers['Content-Type'], undefined)
 
+// ── 超时：路由守卫不能因 /auth/me 无响应而永久白屏 ──────────
+globalThis.fetch = (_path, init) => new Promise((_resolve, reject) => {
+  init.signal.addEventListener('abort', () => {
+    reject(new DOMException('aborted', 'AbortError'))
+  }, { once: true })
+})
+await assert.rejects(
+  api.get('/auth/me', { timeout: 10 }),
+  error => error.status === 0 && error.message === '请求超时',
+)
+
+// ── 收到响应头后，响应体卡住也必须超时 ─────────────────────
+globalThis.fetch = async (_path, init) => ({
+  status: 200,
+  ok: true,
+  json: () => new Promise((_resolve, reject) => {
+    init.signal.addEventListener('abort', () => {
+      reject(new DOMException('aborted', 'AbortError'))
+    }, { once: true })
+  }),
+})
+await assert.rejects(
+  api.get('/auth/me', { timeout: 10 }),
+  error => error.status === 0 && error.message === '请求超时',
+)
+
 console.log('api.js smoke: all assertions passed')

@@ -13,7 +13,7 @@ export const auth = reactive({
 
 async function fetchMe() {
   try {
-    const data = await api.get('/auth/me')
+    const data = await api.get('/auth/me', { timeout: 10000 })
     auth.user = data.user
   } catch {
     auth.user = null
