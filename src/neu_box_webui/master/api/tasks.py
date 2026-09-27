@@ -104,14 +104,19 @@ def _forward(node_id: str, path: str, params: dict | None = None,
 
 def _queue_payload(node_id: str, labels: set[str] | None = None,
                    timeout: int = 10):
-    """队列快照；labels 非 None 时只保留属主在 labels 内的任务。"""
+    """队列快照；labels 非 None 时只保留属主在 labels 内的任务。
+
+    worker 0.5.0 起队列混有 neu-sbox acquire 的生命周期记录
+    （kind='acquire'，状态 active/released，无 task_id/command）；
+    终端沙盒在左栏「活跃沙盒」展示，队列只保留命令任务。
+    """
     resp = _forward(node_id, '/tasks', timeout=timeout)
     payload = resp.json()
-    if isinstance(payload, dict) and 'queue' in payload and labels is not None:
-        payload['queue'] = [
-            task for task in payload['queue']
-            if task.get('user_id') in labels
-        ]
+    if isinstance(payload, dict) and 'queue' in payload:
+        queue = [t for t in payload['queue'] if t.get('kind') != 'acquire']
+        if labels is not None:
+            queue = [t for t in queue if t.get('user_id') in labels]
+        payload['queue'] = queue
     return resp, payload
 
 

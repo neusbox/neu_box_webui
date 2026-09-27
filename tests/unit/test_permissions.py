@@ -478,3 +478,28 @@ def test_admin_delete_mixed_tasks_and_sandboxes(env):
     assert worker.deleted == [["t-bob"]]
     assert worker.released == ["sbx_alice_43210.slice"]
     assert resp.get_json()["deleted"] == 2
+
+
+def test_acquire_entries_filtered_from_queue(env):
+    """worker 0.5.0 的 neu-sbox acquire 记录（kind=acquire）不进入队列视图。"""
+    client, worker = env["client"], env["worker"]
+    for status, at in (("active", 1), ("released", 2)):
+        worker.queue.append({
+            "task_id": None, "id": f"acq-{status}", "kind": "acquire",
+            "user_id": "alice", "status": status, "command": None,
+            "cpu": 0, "mem": 0, "device_num": 1, "devices": ["235:0"],
+            "position": 0, "priority": 0, "eta": None, "est_time": 0,
+            "created_at": at,
+        })
+
+    _login(client, "alice")
+    data = client.get(f"/tasks?node_id={NODE_ID}").get_json()
+    assert {t["task_id"] for t in data["queue"]} == {"t-alice", "t-bob"}
+    assert all(t.get("kind") != "acquire" for t in data["queue"])
+
+    data = client.get(f"/tasks/mine?node_id={NODE_ID}").get_json()
+    assert [t["task_id"] for t in data["queue"]] == ["t-alice"]
+
+    agg = client.get("/tasks/mine").get_json()
+    assert agg["total"] == 1
+    assert [t["task_id"] for t in agg["groups"][0]["tasks"]] == ["t-alice"]
