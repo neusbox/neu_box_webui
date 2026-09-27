@@ -63,6 +63,17 @@ async function loadSandboxes() {
   }
 }
 
+// 销毁左栏沙盒（复用 DELETE /tasks 的沙盒分流，服务端校验属主/admin）
+async function releaseSandbox({ nodeId, name }) {
+  try {
+    const data = await api.delete('/tasks', { node_id: nodeId, task_ids: [name] })
+    toast(data?.message || `沙盒 ${name} 已销毁`, 'success')
+    loadSandboxes()
+  } catch (e) {
+    toast(e.message, 'error')
+  }
+}
+
 // ── 提交表单 ────────────────────────────────────────────────
 const form = reactive({
   cpu: 20,
@@ -189,20 +200,20 @@ async function loadQueue(force = false) {
     queueLoading.value = true
     try {
       if (queueMode.value === 'mine' && !selectedNodeId.value) {
-        // 跨节点聚合（含各节点自己的终端沙盒）
+        // 跨节点聚合
         const data = await api.get('/tasks/mine')
         showNodeCol.value = true
         queue.value = (data.groups || []).flatMap(g =>
-          [...(g.sandboxes || []), ...g.tasks].map(t =>
+          g.tasks.map(t =>
             ({ ...t, node_name: g.node_name, node_id: g.node_id })))
       } else if (queueMode.value === 'mine') {
         const data = await api.get(`/tasks/mine?node_id=${encodeURIComponent(selectedNodeId.value)}`)
         showNodeCol.value = false
-        queue.value = [...(data.sandboxes || []), ...(data.queue || [])]
+        queue.value = data.queue || []
       } else {
         const data = await api.get(`/tasks?node_id=${encodeURIComponent(selectedNodeId.value)}`)
         showNodeCol.value = false
-        queue.value = [...(data.sandboxes || []), ...(data.queue || [])]
+        queue.value = data.queue || []
       }
       checked.value = []
       // 右侧面板打开的任务同步最新队列数据（排队→运行 后自动切到日志）
@@ -248,7 +259,7 @@ function toggleMark(taskId) {
 // ── 删除 ────────────────────────────────────────────────────
 async function batchDelete() {
   if (!checked.value.length) return
-  if (!window.confirm('确定删除所选任务/沙盒吗？\n（运行中任务将被强制终止，终端沙盒会被销毁并终止其中进程）')) return
+  if (!window.confirm('确定删除所选任务吗？\n（运行中的任务将被强制终止）')) return
   try {
     const data = await api.delete('/tasks', {
       node_id: selectedNodeId.value,
@@ -411,10 +422,13 @@ onBeforeUnmount(() => {
             :busy="nodesBusy"
             :device-ids="deviceIds"
             :sandboxes="sandboxes"
+            :my-username="user?.username"
+            :is-admin="user?.role === 'admin'"
             @select="selectNode"
             @refresh="() => loadNodes(true)"
             @manage="manageNodes"
             @update:device-ids="v => deviceIds = v"
+            @release="releaseSandbox"
           />
         </div>
       </div>

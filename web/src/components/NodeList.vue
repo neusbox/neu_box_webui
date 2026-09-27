@@ -4,6 +4,7 @@
  * 点击选中节点；设备选择与活跃沙盒在下方展示。
  */
 import { computed } from 'vue'
+import Icon from './Icon.vue'
 import {
   formatBytes, formatCpu, formatTime,
   cpuUsedPercent, memUsedPercent,
@@ -14,8 +15,10 @@ const props = defineProps({
   selectedId: { type: String, default: null },
   deviceIds: { type: Array, default: () => [] },
   sandboxes: { type: Array, default: () => [] },
+  myUsername: { type: String, default: '' },
+  isAdmin: { type: Boolean, default: false },
 })
-const emit = defineEmits(['select', 'refresh', 'manage', 'update:deviceIds'])
+const emit = defineEmits(['select', 'refresh', 'manage', 'update:deviceIds', 'release'])
 
 const selected = computed(() =>
   props.nodes.find(n => n.node_id === props.selectedId) || null)
@@ -41,6 +44,16 @@ function sandboxKind(s) {
 function sandboxDevs(s) {
   const devs = (s.devices || []).map(d => String(d).split(':')[1])
   return devs.length ? `卡 ${devs.join(', ')}` : '无设备'
+}
+
+function canRelease(s) {
+  return props.isAdmin || s.owner === props.myUsername
+}
+
+function askRelease(s) {
+  if (!selected.value) return
+  if (!window.confirm(`确定销毁沙盒 ${s.name} 吗？\n将终止其中所有进程并释放 CPU/内存/卡。`)) return
+  emit('release', { nodeId: selected.value.node_id, name: s.name })
 }
 </script>
 
@@ -148,6 +161,11 @@ function sandboxDevs(s) {
           <span class="text-3" style="font-family:var(--mono);font-size:11px">
             {{ formatTime(s.created_at) }}
           </span>
+          <button v-if="canRelease(s)" class="btn btn-ghost btn-icon"
+                  style="width:22px;height:22px;flex:none" :title="`销毁沙盒（终止其中进程）`"
+                  @click="askRelease(s)">
+            <Icon name="trash" :size="12" />
+          </button>
         </div>
       </div>
     </div>

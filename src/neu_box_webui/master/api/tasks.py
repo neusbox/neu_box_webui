@@ -102,71 +102,17 @@ def _forward(node_id: str, path: str, params: dict | None = None,
     return pool.forward_to_node(node_id, path, body or {}, method=method, timeout=timeout)
 
 
-def _sandbox_rows(node_id: str, labels: set[str] | None = None) -> list[dict]:
-    """终端沙盒（neu-sbox acquire）→ 队列行视图。
-
-    沙盒不是队列任务，但同样占用节点资源（CPU/内存/卡），
-    合并进队列展示避免「卡被谁占了查不到」。status='terminal'、
-    sandbox=True 供前端渲染与删除路由（release 而非任务删除）。
-    labels 非 None 时只保留属主在 labels 内的沙盒。
-    """
-    try:
-        resp = _forward(node_id, '/sandbox/list', timeout=10)
-        data = resp.json() if resp.ok else {}
-    except ValueError:
-        return []
-    rows = []
-    for s in data.get('sandboxes') or []:
-        name = s.get('name') or ''
-        if not name:
-            continue
-        owner = s.get('owner') or ''
-        if labels is not None and owner not in labels:
-            continue
-        devices = s.get('devices') or []
-        pids = s.get('pids') or []
-        rows.append({
-            'task_id': name,
-            'sandbox': True,
-            'user_id': owner,
-            'command': f"[终端沙盒] PID {', '.join(map(str, pids)) or '?'}",
-            'status': 'terminal',
-            'position': 0,
-            'priority': 0,
-            'cpu': s.get('cpu', 0),
-            'mem': s.get('mem', '0'),
-            'device_num': len(devices),
-            'devices': devices,
-            'eta': None,
-            'est_time': 0,
-            'target': {'type': 'host'},
-            'created_at': s.get('created_at'),
-            'pids': pids,
-        })
-    return rows
-
-
-def _queue_snapshot(node_id: str, labels: set[str] | None = None,
-                    timeout: int = 10):
-    """并发读取任务和终端沙盒，避免一个轮询请求串行等待两次超时。"""
-    with ThreadPoolExecutor(max_workers=2,
-                            thread_name_prefix='node-queue') as executor:
-        tasks_future = executor.submit(
-            _forward, node_id, '/tasks', timeout=timeout,
-        )
-        sandboxes_future = executor.submit(_sandbox_rows, node_id, labels)
-        resp = tasks_future.result()
-        payload = resp.json()
-        sandboxes = sandboxes_future.result()
-
-    if isinstance(payload, dict) and 'queue' in payload:
-        if labels is not None:
-            payload['queue'] = [
-                task for task in payload['queue']
-                if task.get('user_id') in labels
-            ]
-        payload['sandboxes'] = sandboxes
-    return resp, payload, sandboxes
+def _queue_payload(node_id: str, labels: set[str] | None = None,
+                   timeout: int = 10):
+    """队列快照；labels 非 None 时只保留属主在 labels 内的任务。"""
+    resp = _forward(node_id, '/tasks', timeout=timeout)
+    payload = resp.json()
+    if isinstance(payload, dict) and 'queue' in payload and labels is not None:
+        payload['queue'] = [
+            task for task in payload['queue']
+            if task.get('user_id') in labels
+        ]
+    return resp, payload
 
 
 def _sandbox_owners(node_id: str) -> dict[str, str]:
@@ -269,7 +215,7 @@ def list_tasks():
     labels = _my_labels(_node_name(node_id)) \
         if request.args.get('mine') == '1' else None
     try:
-        resp, payload, _ = _queue_snapshot(node_id, labels)
+        resp, payload = _queue_payload(node_id, labels)
     except ValueError as e:
         return {'error': f'{e}。请检查是否选择了正确的节点'}, 404
     return payload, resp.status_code
@@ -292,7 +238,7 @@ def list_my_tasks():
     if node_id:
         labels = _my_labels(_node_name(node_id))
         try:
-            resp, payload, _ = _queue_snapshot(node_id, labels)
+            resp, payload = _queue_payload(node_id, labels)
         except ValueError as e:
             return {'error': f'{e}。请检查是否选择了正确的节点'}, 404
         return payload, resp.status_code
@@ -310,7 +256,7 @@ def list_my_tasks():
     def _fetch(node: dict) -> dict | None:
         try:
             labels = _labels_for(user, node['name'])
-            resp, payload, sandboxes = _queue_snapshot(node['node_id'], labels)
+            resp, payload = _queue_payload(node['node_id'], labels)
             if not resp.ok:
                 payload = {}
             queue = payload.get('queue', []) if isinstance(payload, dict) else []
@@ -319,7 +265,6 @@ def list_my_tasks():
                 'node_name': node['name'],
                 'node_status': 'online',
                 'tasks': queue,
-                'sandboxes': sandboxes,
             }
         except ValueError:
             return None
@@ -330,7 +275,7 @@ def list_my_tasks():
             if result is not None:
                 groups.append(result)
     groups.sort(key=lambda g: g['node_name'])
-    total = sum(len(g['tasks']) + len(g['sandboxes']) for g in groups)
+    total = sum(len(g['tasks']) for g in groups)
     return {'groups': groups, 'offline_nodes': offline_nodes,
             'total': total}, 200
 

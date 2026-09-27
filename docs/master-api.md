@@ -75,7 +75,7 @@ WebUI 用户名）。密码 Fernet 加密存于 master（密钥由 `SECRET_KEY` 
 | GET | `/tasks?node_id=` | 队列快照（转发 worker；`&mine=1` 时服务端按 user_id 过滤） |
 | GET | `/tasks/mine?node_id=` | 单节点「我的任务」（转发 + 服务端按 user_id 过滤） |
 | GET | `/tasks/mine` | 跨节点聚合「我的任务」（并发拉取在线节点队列）：`{groups:[{node_id, node_name, node_status, tasks[]}], offline_nodes:[{node_id, node_name}], total}` |
-| DELETE | `/tasks` | 删除/终止（转发 worker）。非属主且非管理员的 id 被跳过，响应附 `denied` 列表 |
+| DELETE | `/tasks` | 删除/终止（转发 worker）。非属主且非管理员的 id 被跳过，响应附 `denied` 列表。task_ids 混入沙盒名（`sbx_*.slice`）时走 `/sandbox/release` 销毁（左栏沙盒卡的「销毁」按钮即此路径） |
 | GET | `/tasks/<task_id>` | 任务结果（`?node_id=`） |
 | GET | `/tasks/<task_id>/log` | 任务日志（属主/管理员；`?node_id=&tail=N` 或 `&offset=&limit=&raw=1` 纯文本） |
 

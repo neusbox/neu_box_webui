@@ -6,8 +6,6 @@
 from __future__ import annotations
 
 import json
-import threading
-
 import pytest
 
 from neu_box_webui.database.migrations import migrate_database
@@ -255,36 +253,14 @@ def test_my_tasks_aggregate(env):
     client = env["client"]
     _login(client, "alice")
     data = client.get("/tasks/mine").get_json()
-    assert data["total"] == 2  # 1 个任务 + 1 个自己的终端沙盒
+    assert data["total"] == 1
     assert len(data["groups"]) == 1
     group = data["groups"][0]
     assert group["node_name"] == "gpu-01"
     assert group["node_status"] == "online"
     assert [t["task_id"] for t in group["tasks"]] == ["t-alice"]
-    assert [s["task_id"] for s in group["sandboxes"]] == ["sbx_alice_43210.slice"]
     assert data["offline_nodes"] == []
 
-
-def test_queue_and_sandbox_requests_run_concurrently(env):
-    """慢 Worker 上的两个队列请求不能串行占用 Web 线程。"""
-    client, worker = env["client"], env["worker"]
-    _login(client, "alice")
-    original_request = worker.request
-    both_started = threading.Barrier(2)
-
-    def synchronized_request(method, url, **kwargs):
-        path = url.split("://", 1)[1].split("/", 1)[1]
-        if method == "GET" and path in {"tasks", "sandbox/list"}:
-            both_started.wait(timeout=1)
-        return original_request(method, url, **kwargs)
-
-    Nodes_Pool.get_nodes_pool()._request = synchronized_request
-
-    resp = client.get(f"/tasks/mine?node_id={NODE_ID}")
-
-    assert resp.status_code == 200
-    assert len(resp.get_json()["queue"]) == 1
-    assert len(resp.get_json()["sandboxes"]) == 1
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -470,44 +446,8 @@ def test_legacy_experiment_without_owner_only_admin(env):
 
 
 # ═══════════════════════════════════════════════════════════════
-# 终端沙盒：队列合并展示 + 删除走 release 路由
+# 终端沙盒：销毁走 release 分流（队列不再展示沙盒，左栏沙盒卡入口）
 # ═══════════════════════════════════════════════════════════════
-
-def test_main_queue_includes_sandbox_rows(env):
-    """主队列响应带 sandboxes 字段（全员可见，与主队列任务一致）。"""
-    client = env["client"]
-    _login(client, "bob")
-    data = client.get(f"/tasks?node_id={NODE_ID}").get_json()
-    assert len(data["sandboxes"]) == 1
-    row = data["sandboxes"][0]
-    assert row["task_id"] == "sbx_alice_43210.slice"
-    assert row["user_id"] == "alice"
-    assert row["status"] == "terminal"
-    assert row["sandbox"] is True
-    assert row["device_num"] == 1 and row["devices"] == ["235:0"]
-
-
-def test_main_queue_mine_filters_sandboxes(env):
-    client = env["client"]
-    _login(client, "alice")
-    data = client.get(f"/tasks?node_id={NODE_ID}&mine=1").get_json()
-    assert [s["task_id"] for s in data["sandboxes"]] == ["sbx_alice_43210.slice"]
-
-    _login(client, "bob")
-    data = client.get(f"/tasks?node_id={NODE_ID}&mine=1").get_json()
-    assert data["sandboxes"] == []
-
-
-def test_my_tasks_single_node_includes_own_sandboxes(env):
-    client = env["client"]
-    _login(client, "alice")
-    data = client.get(f"/tasks/mine?node_id={NODE_ID}").get_json()
-    assert [s["task_id"] for s in data["sandboxes"]] == ["sbx_alice_43210.slice"]
-
-    _login(client, "bob")
-    data = client.get(f"/tasks/mine?node_id={NODE_ID}").get_json()
-    assert data["sandboxes"] == []
-
 
 def test_delete_sandbox_routed_to_release(env):
     """沙盒名走 /sandbox/release；非属主非 admin 被拒，属主可销毁。"""

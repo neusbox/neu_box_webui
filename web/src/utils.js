@@ -79,7 +79,7 @@ export function handleCR(text) {
 }
 
 export function statusLabel(s) {
-  const map = { queued: '排队中', running: '执行中', completed: '已完成', failed: '失败', terminal: '终端沙盒' }
+  const map = { queued: '排队中', running: '执行中', completed: '已完成', failed: '失败' }
   return map[s] || s
 }
 
