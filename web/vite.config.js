@@ -18,6 +18,7 @@ export default defineConfig({
     proxy: {
       '/auth': 'http://127.0.0.1:25565',
       '/tasks': 'http://127.0.0.1:25565',
+      '/ops': 'http://127.0.0.1:25565',
       '/nodes': 'http://127.0.0.1:25565',
       '/experiments': 'http://127.0.0.1:25565',
       '/admin': 'http://127.0.0.1:25565',
@@ -26,7 +27,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: '../src/neu_box_webui/master/static',
+    outDir: '../src/neuops/master/static',
     emptyOutDir: true,
     chunkSizeWarningLimit: 900,
   },

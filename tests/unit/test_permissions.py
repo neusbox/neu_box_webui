@@ -8,14 +8,14 @@ from __future__ import annotations
 import json
 import pytest
 
-from neu_box_webui.database.migrations import migrate_database
-from neu_box_webui.master.services.db import (
+from neuops.database.migrations import migrate_database
+from neuops.master.services.db import (
     Database,
     MIGRATIONS_PACKAGE,
     REQUIRED_COLUMNS,
     REQUIRED_INDEXES,
 )
-from neu_box_webui.master.services.nodes_pool import Nodes, Nodes_Pool
+from neuops.master.services.nodes_pool import Nodes, Nodes_Pool
 
 
 NODE_ID = "node-1"
@@ -132,7 +132,7 @@ def env(tmp_path, monkeypatch):
     pool._request = worker.request
     Nodes_Pool._instance = pool
 
-    from neu_box_webui.master.app import create_app
+    from neuops.master.app import create_app
 
     app = create_app()
     yield {"client": app.test_client(), "worker": worker, "db": database_obj}
@@ -503,3 +503,14 @@ def test_acquire_entries_filtered_from_queue(env):
     agg = client.get("/tasks/mine").get_json()
     assert agg["total"] == 1
     assert [t["task_id"] for t in agg["groups"][0]["tasks"]] == ["t-alice"]
+
+
+def test_normal_task_cannot_execute_as_root(env):
+    client, worker, db = env["client"], env["worker"], env["db"]
+    _login(client, "root")
+    # 即使 WebUI 用户名/节点凭据是 root，也不能走普通任务队列执行特权命令。
+    resp = client.post("/tasks", json={
+        "node_id": NODE_ID, "command": "id", "user_id": "root",
+    })
+    assert resp.status_code == 403
+    assert worker.submitted == []

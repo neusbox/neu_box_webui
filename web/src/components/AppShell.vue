@@ -15,6 +15,8 @@ const isAdmin = computed(() => user.value?.role === 'admin')
 
 const nav = [
   { name: 'dashboard', label: '概览', icon: 'grid' },
+  { name: 'ops', label: '运维工单', icon: 'inbox' },
+  { name: 'ops-knowledge', label: '知识库', icon: 'folder' },
   { name: 'tasks', label: '任务', icon: 'terminal' },
   { name: 'experiments', label: '实验', icon: 'flask' },
 ]
@@ -35,10 +37,10 @@ function isActive(name) {
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">NB</div>
+        <div class="brand-mark">NO</div>
         <div>
-          <div class="brand-name">Neu Box</div>
-          <div class="brand-sub">命令沙盒 · Master</div>
+          <div class="brand-name">NeuOps</div>
+          <div class="brand-sub">AI 运维工单 · Master</div>
         </div>
       </div>
 

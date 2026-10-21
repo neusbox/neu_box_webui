@@ -1,0 +1,24 @@
+[Unit]
+Description=NeuOps (master)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=neuops
+Group=neuops
+WorkingDirectory=/opt/neuops
+EnvironmentFile=/opt/neuops/runtime/config/webui.env
+ExecStart=/opt/neuops/.venv/bin/python -m neuops.master.app --config /opt/neuops/runtime/config/webui.env serve
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/neuops/runtime
+
+[Install]
+WantedBy=multi-user.target

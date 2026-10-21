@@ -5,6 +5,9 @@ import DashboardView from './views/DashboardView.vue'
 import TasksView from './views/TasksView.vue'
 import TaskLogView from './views/TaskLogView.vue'
 import ExperimentsView from './views/ExperimentsView.vue'
+import OpsView from './views/OpsView.vue'
+import OpsTicketDetailView from './views/OpsTicketDetailView.vue'
+import OpsKnowledgeView from './views/OpsKnowledgeView.vue'
 import ExperimentDetailView from './views/ExperimentDetailView.vue'
 import SettingsView from './views/SettingsView.vue'
 import AdminUsersView from './views/AdminUsersView.vue'
@@ -17,6 +20,9 @@ const router = createRouter({
     { path: '/', name: 'dashboard', component: DashboardView },
     { path: '/tasks', name: 'tasks', component: TasksView },
     { path: '/tasks/:nodeId/:taskId/log', name: 'task-log', component: TaskLogView },
+    { path: '/ops', name: 'ops', component: OpsView },
+    { path: '/ops/knowledge', name: 'ops-knowledge', component: OpsKnowledgeView },
+    { path: '/ops/:id', name: 'ops-ticket', component: OpsTicketDetailView },
     { path: '/experiments', name: 'experiments', component: ExperimentsView },
     { path: '/experiments/:id', name: 'experiment-detail', component: ExperimentDetailView },
     { path: '/settings', name: 'settings', component: SettingsView },
@@ -52,11 +58,12 @@ router.beforeEach(async (to) => {
 router.afterEach((to) => {
   const titles = {
     dashboard: '概览', tasks: '任务', 'task-log': '任务日志', experiments: '实验',
-    'experiment-detail': '实验详情', settings: '设置',
+    'experiment-detail': '实验详情', ops: '运维工单',
+    'ops-ticket': '工单详情', 'ops-knowledge': '知识库', settings: '设置',
     'admin-users': '用户管理', 'admin-nodes': '节点管理',
   }
   const t = titles[to.name]
-  document.title = t ? `Neu Box — ${t}` : 'Neu Box'
+  document.title = t ? `NeuOps — ${t}` : 'NeuOps'
 })
 
 export { router }

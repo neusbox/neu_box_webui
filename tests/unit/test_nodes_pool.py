@@ -6,7 +6,7 @@ import time
 
 import requests
 
-from neu_box_webui.master.services.nodes_pool import Nodes, Nodes_Pool
+from neuops.master.services.nodes_pool import Nodes, Nodes_Pool
 
 
 class _StatusResponse:

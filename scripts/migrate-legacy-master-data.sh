@@ -27,7 +27,7 @@ command -v sqlite3 >/dev/null 2>&1 || die "未找到 sqlite3"
 [[ -f "$CONFIG_PATH" ]] || die "本地配置不存在: $CONFIG_PATH；请先执行 ./run.sh --prepare-only"
 [[ -x "$PYTHON_BIN" ]] || die "Python 环境不存在: $PYTHON_BIN；请先执行 ./run.sh --prepare-only"
 
-if pgrep -af 'neu_box_webui\.master\.app.*serve' >/dev/null 2>&1; then
+if pgrep -af 'neuops\.master\.app.*serve' >/dev/null 2>&1; then
     die "检测到 WebUI 仍在运行，请先停止服务或在启动终端按 Ctrl-C"
 fi
 
@@ -95,10 +95,10 @@ if [[ -d "$SOURCE_DIR/uploads" ]]; then
 fi
 
 env -u NEU_BOX_DB_PATH -u db_dir \
-    "$PYTHON_BIN" -m neu_box_webui.master.app \
+    "$PYTHON_BIN" -m neuops.master.app \
     --config "$CONFIG_PATH" db migrate
 env -u ADMIN_USER -u ADMIN_PASS -u NEU_BOX_DB_PATH -u db_dir \
-    "$PYTHON_BIN" -m neu_box_webui.master.app \
+    "$PYTHON_BIN" -m neuops.master.app \
     --config "$CONFIG_PATH" admin reset-password --from-config
 
 FINAL_INTEGRITY="$(sqlite3 "$ACTIVE_DB" 'PRAGMA integrity_check;')"

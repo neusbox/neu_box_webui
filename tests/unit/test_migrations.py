@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from neu_box_webui.database.migrations import (
+from neuops.database.migrations import (
     MigrationError,
     backup_database,
     check_database,
@@ -15,7 +15,7 @@ from neu_box_webui.database.migrations import (
     require_current_schema,
     schema_status,
 )
-from neu_box_webui.master.services.db import (
+from neuops.master.services.db import (
     MIGRATIONS_PACKAGE as MASTER_MIGRATIONS,
     REQUIRED_COLUMNS as MASTER_COLUMNS,
     REQUIRED_INDEXES as MASTER_INDEXES,
@@ -27,9 +27,10 @@ from neu_box_webui.master.services.db import (
     [
         (
             MASTER_MIGRATIONS, MASTER_COLUMNS, MASTER_INDEXES,
-            (1, 2, 3),
+            (1, 2, 3, 4),
             [(1, "initial"), (2, "user_system"),
-             (3, "node_credentials_password")],
+             (3, "node_credentials_password"),
+             (4, "ops_tickets")],
         ),
     ],
 )
@@ -227,3 +228,62 @@ def test_backup_uses_consistent_sqlite_copy(tmp_path):
     with sqlite3.connect(backup) as conn:
         count = conn.execute("SELECT count(*) FROM users").fetchone()[0]
     assert count == 1
+
+
+def test_legacy_v1_database_can_be_adopted_with_legacy_schema(tmp_path):
+    """旧库没有 schema_migrations / ops 表时，按 v1 结构接管后继续迁移。"""
+    from neuops.master.services.db import (
+        LEGACY_REQUIRED_COLUMNS,
+        LEGACY_REQUIRED_INDEXES,
+    )
+
+    database = tmp_path / "legacy.db"
+    with sqlite3.connect(database) as conn:
+        conn.executescript("""
+            CREATE TABLE folders (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                parent_id TEXT DEFAULT NULL, created_at REAL
+            );
+            CREATE INDEX idx_folder_parent ON folders(parent_id);
+            CREATE TABLE users (
+                id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL, role TEXT DEFAULT 'user',
+                created_at REAL
+            );
+            CREATE INDEX idx_users_username ON users(username);
+            CREATE TABLE user_credentials (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+                node_name TEXT NOT NULL, username TEXT NOT NULL,
+                created_at REAL, UNIQUE(user_id, node_name)
+            );
+            CREATE INDEX idx_uc_user ON user_credentials(user_id);
+            CREATE TABLE experiments (
+                id TEXT PRIMARY KEY, title TEXT NOT NULL,
+                blocks TEXT DEFAULT '[]', tags TEXT DEFAULT '[]',
+                created_by TEXT DEFAULT '', folder_id TEXT DEFAULT NULL,
+                created_at REAL, updated_at REAL
+            );
+            CREATE INDEX idx_exp_created ON experiments(created_at);
+            CREATE INDEX idx_exp_created_by ON experiments(created_by);
+            CREATE INDEX idx_exp_folder ON experiments(folder_id);
+        """)
+        conn.commit()
+
+    status = migrate_database(
+        database, MASTER_MIGRATIONS, MASTER_COLUMNS, MASTER_INDEXES,
+        legacy_columns=LEGACY_REQUIRED_COLUMNS,
+        legacy_indexes=LEGACY_REQUIRED_INDEXES,
+    )
+    assert status.state == "current"
+    assert status.current == 4
+    with sqlite3.connect(database) as conn:
+        tables = {
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        versions = [
+            row[0] for row in conn.execute(
+                "SELECT version FROM schema_migrations ORDER BY version")
+        ]
+    assert "ops_tickets" in tables
+    assert versions == [1, 2, 3, 4]

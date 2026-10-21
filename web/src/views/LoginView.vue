@@ -79,9 +79,9 @@ async function submit() {
   <div class="login-wrap">
     <div class="login-card">
       <div class="login-brand">
-        <div class="brand-mark">NB</div>
-        <div class="login-title">Neu Box</div>
-        <div class="login-sub">命令沙盒 · 集群 Master</div>
+        <div class="brand-mark">NO</div>
+        <div class="login-title">NeuOps</div>
+        <div class="login-sub">AI 运维工单 · 集群 Master</div>
       </div>
 
       <!-- 登录 / 注册 切换 -->

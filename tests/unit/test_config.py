@@ -2,18 +2,18 @@ from __future__ import annotations
 
 import os
 
-from neu_box_webui.config import (
+from neuops.config import (
     load_role_environment,
     user_config_dir,
     user_data_dir,
     user_log_dir,
 )
-from neu_box_webui.master.paths import (
+from neuops.master.paths import (
     experiment_logs_dir,
     nodes_config_path,
     uploads_dir,
 )
-from neu_box_webui.master.services.db import database_path
+from neuops.master.services.db import database_path
 
 
 def test_default_paths_live_under_project_runtime(tmp_path, monkeypatch):

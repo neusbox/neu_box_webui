@@ -12,14 +12,14 @@ import json
 
 import pytest
 
-from neu_box_webui.database.migrations import migrate_database
-from neu_box_webui.master.services.db import (
+from neuops.database.migrations import migrate_database
+from neuops.master.services.db import (
     Database,
     MIGRATIONS_PACKAGE,
     REQUIRED_COLUMNS,
     REQUIRED_INDEXES,
 )
-from neu_box_webui.master.services.nodes_pool import Nodes, Nodes_Pool
+from neuops.master.services.nodes_pool import Nodes, Nodes_Pool
 
 PASSWORD = "pass1234"
 
@@ -78,7 +78,7 @@ def env(tmp_path, monkeypatch):
     pool._request = fake_request
     Nodes_Pool._instance = pool
 
-    from neu_box_webui.master.app import create_app
+    from neuops.master.app import create_app
 
     app = create_app()
     client = app.test_client()
@@ -113,7 +113,7 @@ def test_get_all_nodes_refresh_queries_live(env):
 
 
 def test_get_all_nodes_requires_login(env):
-    from neu_box_webui.master.app import create_app  # noqa: F401
+    from neuops.master.app import create_app  # noqa: F401
 
     app = create_app()
     anon = app.test_client()

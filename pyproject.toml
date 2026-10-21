@@ -3,14 +3,14 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "neu-box-webui"
+name = "neuops"
 dynamic = ["version"]
-description = "Neu Box WebUI (master): node pool, task forwarding, experiment records and web UI"
+description = "NeuOps (master): node pool, task forwarding, experiments, AI ops tickets and self-learning knowledge base"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [
-    { name = "Neu Box contributors" },
+    { name = "NeuOps contributors" },
 ]
 classifiers = [
     "Private :: Do Not Upload",
@@ -32,13 +32,13 @@ dev = [
 ]
 
 [tool.setuptools.dynamic]
-version = { attr = "neu_box_webui.__version__" }
+version = { attr = "neuops.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"neu_box_webui.master" = [
+"neuops.master" = [
     "migrations/*.sql",
     "static/**/*",
 ]

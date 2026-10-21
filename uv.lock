@@ -546,7 +546,7 @@ wheels = [
 ]
 
 [[package]]
-name = "neu-box-webui"
+name = "neuops"
 source = { editable = "." }
 dependencies = [
     { name = "bcrypt" },

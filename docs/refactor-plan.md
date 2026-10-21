@@ -154,7 +154,7 @@ CREATE INDEX idx_ts_node ON task_submissions(node_id, created_at);
 ### 目录结构（static 重组 + 新增 templates）
 
 ```
-src/neu_box_webui/master/
+src/neuops/master/
 ├── templates/                  # 新增（Jinja2，只渲染壳与页面骨架）
 │   ├── base.html               # 侧边导航、用户菜单、主题、toast 容器
 │   ├── login.html

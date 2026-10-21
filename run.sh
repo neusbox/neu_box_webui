@@ -4,7 +4,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 CALLER_DIR="$(pwd -P)"
 RUNTIME_DIR="$SCRIPT_DIR/runtime"
-CONFIG_PATH="${NEU_BOX_WEBUI_CONFIG:-$RUNTIME_DIR/config/webui.env}"
+CONFIG_PATH="${NEUOPS_CONFIG:-${NEU_BOX_WEBUI_CONFIG:-$RUNTIME_DIR/config/webui.env}}"
 PREPARE_ONLY=0
 RESET_ADMIN_PASSWORD=0
 SERVE_ARGS=()
@@ -79,10 +79,11 @@ mkdir -p \
     "$RUNTIME_DIR/config" \
     "$RUNTIME_DIR/data/master/uploads" \
     "$RUNTIME_DIR/data/master/experiment-logs" \
+    "$RUNTIME_DIR/data/master/ops-logs" \
     "$RUNTIME_DIR/data/backups" \
     "$RUNTIME_DIR/logs"
 
-echo "[webui] 同步运行依赖"
+echo "[neuops] 同步运行依赖"
 uv sync --frozen --no-dev
 PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
 
@@ -91,7 +92,7 @@ if [[ ! -e "$CONFIG_PATH" ]]; then
     mkdir -p "$(dirname -- "$CONFIG_PATH")"
     cp "$SCRIPT_DIR/deploy/config/master.env.example" "$CONFIG_PATH"
     chmod 600 "$CONFIG_PATH"
-    echo "[webui] 已创建配置: $CONFIG_PATH"
+    echo "[neuops] 已创建配置: $CONFIG_PATH"
 elif [[ ! -f "$CONFIG_PATH" ]]; then
     echo "error: 配置路径不是普通文件: $CONFIG_PATH" >&2
     exit 1
@@ -116,20 +117,20 @@ if grep -qx 'SECRET_KEY=' "$CONFIG_PATH"; then
     replace_setting \
         SECRET_KEY \
         "$($PYTHON_BIN -c 'import secrets; print(secrets.token_hex(32))')"
-    echo "[webui] 已生成并保存 SECRET_KEY"
+    echo "[neuops] 已生成并保存 SECRET_KEY"
 fi
 
 if grep -qx 'ADMIN_PASS=231415926@qq.com' "$CONFIG_PATH"; then
-    echo "[webui] 警告: 当前使用公开的默认管理员密码，请勿暴露到公网" >&2
+    echo "[neuops] 警告: 当前使用公开的默认管理员密码，请勿暴露到公网" >&2
 elif grep -qx 'ADMIN_PASS=admin' "$CONFIG_PATH"; then
-    echo "[webui] 警告: 当前 ADMIN_PASS 仍为旧默认值 admin，请立即修改" >&2
+    echo "[neuops] 警告: 当前 ADMIN_PASS 仍为旧默认值 admin，请立即修改" >&2
 fi
 
 NODES_PATH="$($PYTHON_BIN - "$CONFIG_PATH" <<'PY'
 import sys
 
-from neu_box_webui.config import load_role_environment
-from neu_box_webui.master.paths import nodes_config_path
+from neuops.config import load_role_environment
+from neuops.master.paths import nodes_config_path
 
 load_role_environment("webui", sys.argv[1])
 print(nodes_config_path())
@@ -138,14 +139,14 @@ PY
 if [[ ! -e "$NODES_PATH" ]]; then
     mkdir -p "$(dirname -- "$NODES_PATH")"
     cp "$SCRIPT_DIR/deploy/config/nodes.json.example" "$NODES_PATH"
-    echo "[webui] 已创建节点配置: $NODES_PATH"
+    echo "[neuops] 已创建节点配置: $NODES_PATH"
 elif [[ ! -f "$NODES_PATH" ]]; then
     echo "error: 节点配置路径不是普通文件: $NODES_PATH" >&2
     exit 1
 fi
 
-echo "[webui] 执行数据库迁移"
-"$PYTHON_BIN" -m neu_box_webui.master.app \
+echo "[neuops] 执行数据库迁移"
+"$PYTHON_BIN" -m neuops.master.app \
     --config "$CONFIG_PATH" db migrate
 
 if ((RESET_ADMIN_PASSWORD)); then
@@ -154,18 +155,18 @@ if ((RESET_ADMIN_PASSWORD)); then
         replace_setting ADMIN_PASS "$GENERATED_ADMIN_PASS"
     fi
     printf '%s\n' "$GENERATED_ADMIN_PASS" | \
-        "$PYTHON_BIN" -m neu_box_webui.master.app \
+        "$PYTHON_BIN" -m neuops.master.app \
             --config "$CONFIG_PATH" admin reset-password --password-stdin
-    echo "[webui] 新管理员密码: $GENERATED_ADMIN_PASS"
-    echo "[webui] 密码已写入 $CONFIG_PATH，请妥善保存"
+    echo "[neuops] 新管理员密码: $GENERATED_ADMIN_PASS"
+    echo "[neuops] 密码已写入 $CONFIG_PATH，请妥善保存"
     exit 0
 fi
 
 if ((PREPARE_ONLY)); then
-    echo "[webui] 初始化完成"
+    echo "[neuops] 初始化完成"
     exit 0
 fi
 
-echo "[webui] 启动服务"
-exec "$PYTHON_BIN" -m neu_box_webui.master.app \
+echo "[neuops] 启动服务"
+exec "$PYTHON_BIN" -m neuops.master.app \
     --config "$CONFIG_PATH" serve "${SERVE_ARGS[@]}"

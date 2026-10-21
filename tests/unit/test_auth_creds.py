@@ -9,14 +9,14 @@ import json
 
 import pytest
 
-from neu_box_webui.database.migrations import migrate_database
-from neu_box_webui.master.services.db import (
+from neuops.database.migrations import migrate_database
+from neuops.master.services.db import (
     Database,
     MIGRATIONS_PACKAGE,
     REQUIRED_COLUMNS,
     REQUIRED_INDEXES,
 )
-from neu_box_webui.master.services.nodes_pool import Nodes, Nodes_Pool
+from neuops.master.services.nodes_pool import Nodes, Nodes_Pool
 from test_permissions import _FakeResponse, _login, FakeWorker
 
 NODE_ID = "node-1"
@@ -54,7 +54,7 @@ def env(tmp_path, monkeypatch):
     pool._request = worker.request
     Nodes_Pool._instance = pool
 
-    from neu_box_webui.master.app import create_app
+    from neuops.master.app import create_app
 
     app = create_app()
     yield {"client": app.test_client(), "worker": worker, "db": database_obj}

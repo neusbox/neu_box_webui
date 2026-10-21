@@ -1,7 +1,8 @@
-# Neu Box WebUI (Master) API
+# NeuOps (Master) API
 
-WebUI 对**浏览器前端**（Vue SPA，构建产物在 `master/static/`）暴露的 HTTP
-接口。基础路径：`http://<master-host>:25565`。
+NeuOps 对**浏览器前端**（Vue SPA，构建产物在 `master/static/`）暴露的 HTTP
+接口。基础路径：`http://<master-host>:25565`。AI 运维工单（Rroot）的完整
+说明见 [ops.md](ops.md)。
 
 > Go 客户端（neu_box_goClient）**不经过 WebUI**：它直连 worker 的
 > `NEU_BOX_URL`（见 neu_box 仓库 `docs/worker-api.md`）。WebUI 仅负责
@@ -82,6 +83,10 @@ WebUI 用户名）。密码 Fernet 加密存于 master（密钥由 `SECRET_KEY` 
 `POST /tasks` 请求体字段见 `neu_box` 仓库 `docs/worker-api.md`
 （`priority` 0=普通 1=赶论文）。批量提交 = 前端多次调用。
 
+> **特权命令限制**：普通任务队列（`/tasks`）拒绝 `user_id=root`。
+> root 命令必须走 `/ops` 工单：管理员批准后由 Rroot 执行器以固定 root
+> 身份单次执行。该限制适用于普通用户、管理员和 AI。
+
 ## 实验记录
 
 `created_by` 由服务端从 session 注入。PUT/DELETE 仅属主或管理员。
@@ -106,13 +111,35 @@ WebUI 用户名）。密码 Fernet 加密存于 master（密钥由 `SECRET_KEY` 
 | PUT | `/admin/users/<id>` | 改角色/启用停用（不能停用/降级自己，不能移除最后一个有效管理员） |
 | POST | `/admin/users/<id>/password` | 重置密码 |
 
+## AI 运维工单（Rroot）
+
+基础路径 `/ops`。普通用户只能查看自己的工单；批准/驳回/执行/批量学习
+仅管理员。详细字段与安全模型见 [ops.md](ops.md)。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/ops/stats` | 工单统计、知识库数量、AI 状态 |
+| GET | `/ops/tickets` | 列表（`?status=&kind=&q=`） |
+| POST | `/ops/tickets` | 创建命令/咨询/知识工单 |
+| GET/PUT | `/ops/tickets/<id>` | 详情 / 修改草稿或待审批 |
+| POST | `/ops/tickets/<id>/submit` | 提交审批 |
+| POST | `/ops/tickets/<id>/cancel` | 取消 |
+| POST | `/ops/tickets/<id>/approve` | 管理员批准（可 `execute: true`） |
+| POST | `/ops/tickets/<id>/reject` | 管理员驳回 |
+| POST | `/ops/tickets/<id>/execute` | 管理员执行已批准命令（单次） |
+| GET | `/ops/tickets/<id>/log` | 执行日志（`?raw=1` 纯文本） |
+| POST | `/ops/assistant/suggest` | 根据 `{node_id, request}` 生成命令建议；不创建工单、不执行 |
+| GET | `/ops/knowledge` | 已批准知识列表 |
+| GET | `/ops/knowledge/<id>` | 知识详情 |
+| POST | `/ops/knowledge/learn` | 管理员手动触发学习 |
+
 ## 健康检查
 
 `GET /healthz`：
 
 ```json
-{"status":"ok","role":"master","api_version":2,
- "version":"0.1.0","schema_version":3}
+{"status":"ok","service":"neuops","role":"master","api_version":2,
+ "version":"0.2.0","schema_version":4}
 ```
 
 ## 与 worker 的兼容
@@ -123,7 +150,7 @@ WebUI 心跳时读取 worker `/status` 的 `api_version` 并记录；
 
 | WebUI | 最低 worker |
 |---|---|
-| 0.1.0 | 0.4.0（`/tasks`，`api_version = 2`） |
+| 0.2.0 | 0.4.0（`/tasks`，`api_version = 2`） |
 
 Go 客户端（neu_box_goClient）与 WebUI 无运行时依赖，它只依赖 worker API；
 其兼容矩阵见 neu_box_goClient 仓库 README。

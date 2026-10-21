@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
-STATIC_DIR = WEB_DIR.parent / "src" / "neu_box_webui" / "master" / "static"
+STATIC_DIR = WEB_DIR.parent / "src" / "neuops" / "master" / "static"
 
 
 def test_api_js_smoke():

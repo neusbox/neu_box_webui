@@ -4,9 +4,9 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from neu_box_webui.database.migrations import migrate_database
-from neu_box_webui.database import sqlite_runtime
-from neu_box_webui.master.services.db import (
+from neuops.database.migrations import migrate_database
+from neuops.database import sqlite_runtime
+from neuops.master.services.db import (
     Database,
     MIGRATIONS_PACKAGE,
     REQUIRED_COLUMNS,

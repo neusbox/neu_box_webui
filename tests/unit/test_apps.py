@@ -5,9 +5,9 @@ import logging
 
 import pytest
 
-from neu_box_webui import API_VERSION
-from neu_box_webui.database.migrations import migrate_database
-from neu_box_webui.master.services.db import (
+from neuops import API_VERSION
+from neuops.database.migrations import migrate_database
+from neuops.master.services.db import (
     Database as MasterDatabase,
     MIGRATIONS_PACKAGE as MASTER_MIGRATIONS,
     REQUIRED_COLUMNS as MASTER_COLUMNS,
@@ -31,7 +31,7 @@ def test_master_app_health_and_packaged_static(tmp_path, monkeypatch):
     monkeypatch.setenv("NEU_BOX_EXPERIMENT_LOG_DIR", str(tmp_path / "exp-logs"))
     MasterDatabase._instance = None
 
-    from neu_box_webui.master.app import create_app
+    from neuops.master.app import create_app
 
     app = create_app()
     client = app.test_client()
@@ -39,7 +39,7 @@ def test_master_app_health_and_packaged_static(tmp_path, monkeypatch):
     assert health.status_code == 200
     assert health.json["role"] == "master"
     assert health.json["api_version"] == API_VERSION
-    assert health.json["schema_version"] == 3
+    assert health.json["schema_version"] == 4
     assert client.get("/").status_code == 200
     notice = client.get("/static/notice.txt")
     assert notice.status_code == 200
@@ -76,7 +76,7 @@ def test_admin_init_preserves_existing_password_and_explicit_reset_updates_it(
     monkeypatch.setenv("ADMIN_USER", "admin")
     monkeypatch.setenv("ADMIN_PASS", "new-password")
 
-    from neu_box_webui.master.app import _init_admin, _reset_admin_password
+    from neuops.master.app import _init_admin, _reset_admin_password
 
     _init_admin()
     assert database.verify_user("admin", "old-password")["id"] == user_id
@@ -89,7 +89,7 @@ def test_admin_init_preserves_existing_password_and_explicit_reset_updates_it(
 
 
 def test_node_apply_status_tracks_worker_api_version():
-    from neu_box_webui.master.services.nodes_pool import Nodes
+    from neuops.master.services.nodes_pool import Nodes
 
     node = Nodes("n1", "node1", "127.0.0.1", 59075)
     assert node.worker_api_version is None
@@ -109,7 +109,7 @@ def test_node_apply_status_tracks_worker_api_version():
 
 
 def test_node_apply_status_warns_on_api_mismatch(caplog):
-    from neu_box_webui.master.services.nodes_pool import Nodes
+    from neuops.master.services.nodes_pool import Nodes
 
     node = Nodes("n1", "node1", "127.0.0.1", 59075)
     with caplog.at_level(logging.WARNING):
