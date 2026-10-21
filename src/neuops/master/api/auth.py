@@ -10,13 +10,18 @@
 """
 
 import functools
+import hashlib
+import hmac
 import logging
 import re
+import secrets
+import time
 
-from flask import Blueprint, request, session
+from flask import Blueprint, current_app, request, session
 
-from neuops.config import env_text
+from neuops.config import env_int, env_text
 from neuops.master.services.db import Database
+from neuops.master.services.mailer import MailError, send_login_code
 
 auth_bp = Blueprint('auth', __name__)
 logger = logging.getLogger('master.auth')
@@ -26,8 +31,46 @@ def _registration_allowed() -> bool:
     return env_text('NEU_BOX_ALLOW_REGISTRATION', '1') in ('1', 'true', 'yes')
 
 _USERNAME_RE = re.compile(r'^[a-zA-Z0-9_.-]{2,32}$')
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 # 节点 OS 用户名可以较短（如 "al"、"li"）；不允许单字符
 _NODE_USER_RE = re.compile(r'^[A-Za-z0-9_.-]{2,32}$')
+
+
+def _normalize_email(value: str) -> str:
+    return (value or "").strip().lower()
+
+
+def _validate_email(email: str) -> str | None:
+    if not email:
+        return '邮箱不能为空'
+    if len(email) > 254 or not _EMAIL_RE.match(email):
+        return '邮箱格式不正确'
+    return None
+
+
+def _public_user(user: dict) -> dict:
+    return {
+        "id": user.get("id"),
+        "username": user.get("username"),
+        "role": user.get("role"),
+        "email": user.get("email") or "",
+        "email_verified_at": user.get("email_verified_at"),
+    }
+
+
+def _code_secret() -> str:
+    try:
+        return str(current_app.secret_key or "")
+    except RuntimeError:
+        return env_text("SECRET_KEY", "neuops-email-code")
+
+
+def _code_hash(user_id: str, code: str) -> str:
+    return hmac.new(
+        _code_secret().encode("utf-8"),
+        f"{user_id}:{code}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def __getattr__(name: str):
@@ -97,14 +140,7 @@ def login():
     _db().update_last_login(user['id'])
     logger.info('用户登录: %s (%s)', username, user['role'])
 
-    return {
-        'user': {
-            'id': user['id'],
-            'username': user['username'],
-            'role': user['role'],
-        },
-        'message': '登录成功',
-    }, 200
+    return {'user': _public_user(user), 'message': '登录成功'}, 200
 
 
 @auth_bp.route('/register', methods=['GET'])
@@ -126,24 +162,31 @@ def register():
     data = request.get_json(silent=True) or {}
     username = (data.get('username') or '').strip()
     password = data.get('password') or ''
+    email = _normalize_email(data.get('email') or '')
 
     if not _USERNAME_RE.match(username):
         return {'error': '用户名需 2-32 位字母、数字、_、. 或 -'}, 400
+    email_error = _validate_email(email)
+    if email_error:
+        return {'error': f'注册需要有效邮箱：{email_error}'}, 400
     if len(password) < 4 or len(password) > 128:
         return {'error': '密码长度需 4-128 位'}, 400
     if _db().get_user_by_username(username):
         return {'error': '用户名已被占用'}, 409
+    if _db().get_user_by_email(email):
+        return {'error': '邮箱已被占用'}, 409
 
-    user_id = _db().create_user(username, password, role='user')
+    user_id = _db().create_user(
+        username, password, role='user', email=email)
+    if not user_id:
+        return {'error': '用户名或邮箱已被占用'}, 409
     session.permanent = True
     session['user_id'] = user_id
     _db().update_last_login(user_id)
-    logger.info('新用户注册: %s', username)
+    logger.info('新用户注册: %s <%s>', username, email)
 
-    return {
-        'user': {'id': user_id, 'username': username, 'role': 'user'},
-        'message': '注册成功',
-    }, 201
+    user = _db().get_user(user_id) or {}
+    return {'user': _public_user(user), 'message': '注册成功'}, 201
 
 
 @auth_bp.route('/logout', methods=['POST'])
@@ -163,6 +206,118 @@ def me():
     if not user:
         return {'error': '登录已过期'}, 401
     return {'user': user}, 200
+
+
+# ═══════════════════════════════════════════════════════════════
+# 邮箱与邮箱验证码登录
+# ═══════════════════════════════════════════════════════════════
+
+def _email_code_ttl() -> int:
+    return max(1, env_int("NEUOPS_EMAIL_CODE_TTL_MINUTES", 10))
+
+
+def _email_code_rate() -> int:
+    return max(10, env_int("NEUOPS_EMAIL_CODE_RATE_SECONDS", 60))
+
+
+def _email_code_attempts() -> int:
+    return max(1, env_int("NEUOPS_EMAIL_CODE_MAX_ATTEMPTS", 5))
+
+
+@auth_bp.route('/email', methods=['PUT'])
+@login_required
+def update_email():
+    """旧用户/新用户补充或修改邮箱。"""
+    data = request.get_json(silent=True) or {}
+    email = _normalize_email(data.get('email') or '')
+    error = _validate_email(email)
+    if error:
+        return {'error': error}, 400
+    user = get_current_user()
+    if not user:
+        return {'error': '登录已过期'}, 401
+    existing = _db().get_user_by_email(email)
+    if existing and existing['id'] != user['id']:
+        return {'error': '邮箱已被其他账号使用'}, 409
+    if not _db().update_email(user['id'], email):
+        return {'error': '邮箱已被其他账号使用'}, 409
+    logger.info('用户 %s 更新邮箱: %s', user['username'], email)
+    return {'user': _db().get_user(user['id']), 'message': '邮箱已保存'}, 200
+
+
+@auth_bp.route('/email-code', methods=['POST'])
+def request_email_code():
+    """发送邮箱登录验证码；不泄露邮箱是否已注册。"""
+    data = request.get_json(silent=True) or {}
+    email = _normalize_email(data.get('email') or '')
+    if _validate_email(email):
+        return {'error': '邮箱格式不正确'}, 400
+
+    generic = {'message': '如果该邮箱已注册，验证码已发送'}
+    user = _db().get_user_by_email(email)
+    if not user or not user.get('is_active', 1):
+        return generic, 200
+
+    now = time.time()
+    last = _db().latest_email_code_at(user['id'])
+    if last is not None and now - last < _email_code_rate():
+        return {'error': f'验证码发送过于频繁，请 {_email_code_rate()} 秒后再试'}, 429
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    ttl = _email_code_ttl()
+    _db().clear_email_codes(user['id'])
+    _db().create_email_code(
+        user['id'], email, _code_hash(user['id'], code), now + ttl * 60)
+    try:
+        send_login_code(email, code, ttl)
+    except MailError as exc:
+        _db().clear_email_codes(user['id'])
+        logger.warning('发送登录验证码失败 %s: %s', email, exc)
+        return {'error': '验证码发送失败，请检查邮件服务配置'}, 503
+    logger.info('已发送邮箱登录验证码: %s', email)
+    return generic, 200
+
+
+@auth_bp.route('/email-login', methods=['POST'])
+def email_login():
+    """邮箱 + 验证码登录。"""
+    data = request.get_json(silent=True) or {}
+    email = _normalize_email(data.get('email') or '')
+    code = str(data.get('code') or '').strip()
+    if _validate_email(email):
+        return {'error': '邮箱格式不正确'}, 400
+    if not re.fullmatch(r'\d{6}', code):
+        return {'error': '验证码应为 6 位数字'}, 400
+
+    user = _db().get_user_by_email(email)
+    if not user:
+        return {'error': '邮箱或验证码错误'}, 401
+    if not user.get('is_active', 1):
+        return {'error': '账号已被禁用，请联系管理员'}, 403
+
+    record = _db().get_email_code(user['id'])
+    if not record:
+        return {'error': '验证码已失效，请重新获取'}, 401
+    if float(record['expires_at']) < time.time():
+        _db().consume_email_code(record['id'])
+        return {'error': '验证码已过期，请重新获取'}, 401
+    if int(record['attempts']) >= _email_code_attempts():
+        _db().consume_email_code(record['id'])
+        return {'error': '验证码尝试次数过多，请重新获取'}, 429
+    _db().increment_email_code_attempts(record['id'])
+    if not hmac.compare_digest(
+            str(record['code_hash']), _code_hash(user['id'], code)):
+        return {'error': '邮箱或验证码错误'}, 401
+
+    if not _db().consume_email_code(record['id']):
+        return {'error': '验证码已失效，请重新获取'}, 401
+    _db().mark_email_verified(user['id'])
+    session.permanent = True
+    session['user_id'] = user['id']
+    _db().update_last_login(user['id'])
+    logger.info('用户邮箱登录: %s <%s>', user['username'], email)
+    user = _db().get_user(user['id']) or user
+    return {'user': _public_user(user), 'message': '登录成功'}, 200
 
 
 # ═══════════════════════════════════════════════════════════════

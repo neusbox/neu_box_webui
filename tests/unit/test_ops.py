@@ -395,7 +395,7 @@ def test_assistant_rejects_empty_command_after_retries(env, monkeypatch):
     assert "未生成可执行命令" in resp.get_json()["error"]
     # 初始请求 + 2 次严格重试
     assert len(calls) == 3
-    assert "禁止只返回澄清文字" in calls[1]
+    assert "command 不得为空" in calls[1]
 
 
 def test_assistant_retries_until_command_is_returned(env, monkeypatch):
@@ -433,3 +433,156 @@ def test_assistant_retries_until_command_is_returned(env, monkeypatch):
     assert resp.get_json()["suggestion"]["command"] == (
         "useradd -m -s /bin/bash pengyt")
     assert len(calls) == 2
+
+
+def test_new_command_ticket_notifies_admin_email(env, monkeypatch):
+    client = env["client"]
+    db = env["db"]
+    admin = db.get_user_by_username("root")
+    assert db.update_email(admin["id"], "admin@example.com")
+
+    monkeypatch.setenv("NEUOPS_MAIL_SYNC", "1")
+    monkeypatch.setenv("NEUOPS_SMTP_USER", "bot@qq.com")
+    monkeypatch.setenv("NEUOPS_SMTP_PASSWORD", "qq-auth-code")
+    captured = {}
+
+    from neuops.master.services.mailer import Mailer
+
+    def fake_send(self, to, subject, body):
+        captured.update(to=to, subject=subject, body=body)
+
+    monkeypatch.setattr(Mailer, "send", fake_send)
+    _login(client, "alice")
+    resp = _create_ticket(client, command="df -h /var")
+    assert resp.status_code == 201, resp.get_json()
+
+    assert captured["to"] == ["admin@example.com"]
+    assert "新命令工单待审批" in captured["subject"]
+    assert "df -h /var" in captured["body"]
+    assert resp.get_json()["ticket"]["id"] in captured["body"]
+
+
+def test_knowledge_ticket_does_not_send_command_mail(env, monkeypatch):
+    client, db = env["client"], env["db"]
+    admin = db.get_user_by_username("root")
+    db.update_email(admin["id"], "admin@example.com")
+    monkeypatch.setenv("NEUOPS_MAIL_SYNC", "1")
+    monkeypatch.setenv("NEUOPS_SMTP_USER", "bot@qq.com")
+    monkeypatch.setenv("NEUOPS_SMTP_PASSWORD", "qq-auth-code")
+    sent = []
+    from neuops.master.services.mailer import Mailer
+    monkeypatch.setattr(Mailer, "send",
+                        lambda self, to, subject, body: sent.append(subject))
+    _login(client, "alice")
+    resp = client.post("/ops/tickets", json={
+        "kind": "knowledge",
+        "title": "经验",
+        "knowledge_payload": {"title": "经验", "content": "内容"},
+    })
+    assert resp.status_code == 201
+    assert sent == []
+
+
+def test_admin_can_edit_and_delete_knowledge_without_approval(env):
+    client = env["client"]
+    _login(client, "root")
+    created = client.post("/ops/tickets", json={
+        "kind": "knowledge",
+        "knowledge_payload": {
+            "title": "旧知识标题", "content": "旧内容",
+            "kind": "experience", "tags": ["old"],
+        },
+    })
+    assert created.status_code == 201, created.get_json()
+    ticket_id = created.get_json()["ticket"]["id"]
+    approved = client.post(f"/ops/tickets/{ticket_id}/approve",
+                           json={"reason": "入库"})
+    assert approved.status_code == 200, approved.get_json()
+    knowledge_id = approved.get_json()["knowledge"]["id"]
+
+    updated = client.put(f"/ops/knowledge/{knowledge_id}", json={
+        "title": "新知识标题", "content": "新内容",
+        "kind": "runbook", "tags": ["new"],
+    })
+    assert updated.status_code == 200, updated.get_json()
+    assert updated.get_json()["title"] == "新知识标题"
+    assert updated.get_json()["kind"] == "runbook"
+    found = client.get("/ops/knowledge?q=新知识标题").get_json()["knowledge"]
+    assert found and found[0]["id"] == knowledge_id
+
+    # 普通用户看不到编辑/删除入口，服务端也拒绝。
+    _login(client, "alice")
+    assert client.put(f"/ops/knowledge/{knowledge_id}",
+                      json={"title": "x"}).status_code == 403
+    assert client.delete(f"/ops/knowledge/{knowledge_id}").status_code == 403
+
+    _login(client, "root")
+    assert client.delete(f"/ops/knowledge/{knowledge_id}").status_code == 200
+    assert client.get("/ops/knowledge?q=新知识标题").get_json()["knowledge"] == []
+
+
+def test_agent_calls_readonly_tool_and_streams_progress(env, monkeypatch):
+    monkeypatch.setenv("NEUOPS_AI_ENABLED", "1")
+    monkeypatch.setenv("NEUOPS_AI_API_KEY", "test-key")
+    monkeypatch.setenv("NEUOPS_AI_MODEL", "test-model")
+
+    from neuops.master.services.rroot.ai import AIClient
+    import neuops.master.services.rroot.ai as ai_module
+
+    calls = []
+
+    def fake_complete_json(self, system_prompt, user_prompt, **kwargs):
+        calls.append(user_prompt)
+        if len(calls) == 1:
+            return json.dumps({
+                "type": "tool_call", "name": "ls",
+                "arguments": {"path": "/var/log"},
+            })
+        return json.dumps({
+            "type": "final",
+            "suggestion": {
+                "reply": "查看日志目录后给出命令",
+                "needs_clarification": False,
+                "command": "du -sh /var/log",
+                "explanation": "只读排查",
+                "risk_level": "low",
+                "risk_notes": [],
+                "exec_env": {"workdir": "/root", "timeout_seconds": 120},
+                "alternatives": [],
+                "source_ticket_ids": [],
+            },
+        })
+
+    tool_calls = []
+
+    def fake_execute_tool(node_id, user_id, tool, args, cwd="/"):
+        tool_calls.append((node_id, user_id, tool, args, cwd))
+        return {
+            "tool": tool, "args": args, "cwd": cwd,
+            "output": "total 0\ndrwxr-xr-x 2 root root 6 var",
+            "exit_code": 0, "timed_out": False, "duration": 0.01,
+        }
+
+    monkeypatch.setattr(AIClient, "complete_json", fake_complete_json)
+    monkeypatch.setattr(ai_module, "execute_tool", fake_execute_tool)
+    client = env["client"]
+    _login(client, "alice")
+    resp = client.post("/ops/assistant/agent", json={
+        "node_id": NODE_ID,
+        "request": "查看日志目录占用",
+    })
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/event-stream"
+    events = [
+        json.loads(line[len("data: "):])
+        for line in resp.get_data(as_text=True).splitlines()
+        if line.startswith("data: ")
+    ]
+    assert any(e.get("type") == "tool_start" for e in events)
+    assert any(e.get("type") == "tool_result" for e in events)
+    result = [e for e in events if e.get("type") == "result"][0]
+    assert result["result"]["suggestion"]["command"] == "du -sh /var/log"
+    assert tool_calls
+    assert tool_calls[0][2] == "ls"
+    assert tool_calls[0][3] == {"path": "/var/log"}
+    assert tool_calls[0][1] == "alice"

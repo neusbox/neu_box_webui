@@ -39,16 +39,14 @@ def test_master_app_health_and_packaged_static(tmp_path, monkeypatch):
     assert health.status_code == 200
     assert health.json["role"] == "master"
     assert health.json["api_version"] == API_VERSION
-    assert health.json["schema_version"] == 4
+    assert health.json["schema_version"] == 5
     assert client.get("/").status_code == 200
     notice = client.get("/static/notice.txt")
     assert notice.status_code == 200
     assert b"admin" in notice.data
     assert b"231415926@qq.com" in notice.data
-    assert b"/static/explanation.png" in notice.data
-    explanation = client.get("/static/explanation.png")
-    assert explanation.status_code == 200
-    assert explanation.content_type == "image/png"
+    assert b"QQ SMTP" in notice.data
+    assert b"root" in notice.data
     rules = {(rule.rule, frozenset(rule.methods)) for rule in app.url_map.iter_rules()}
     assert any(path == '/tasks' and 'POST' in methods for path, methods in rules)
     assert any(path == '/tasks' and 'GET' in methods for path, methods in rules)

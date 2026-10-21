@@ -31,7 +31,7 @@ MIGRATIONS_PACKAGE = "neuops.master.migrations"
 REQUIRED_COLUMNS = {
     "users": (
         "id", "username", "password_hash", "role", "created_at",
-        "is_active", "last_login_at",
+        "is_active", "last_login_at", "email", "email_verified_at",
     ),
     "user_credentials": (
         "id", "user_id", "node_name", "username", "created_at",
@@ -64,6 +64,10 @@ REQUIRED_COLUMNS = {
         "id", "ticket_id", "title", "content", "kind", "tags",
         "source_ticket_ids", "content_hash", "created_by", "approved_by",
         "created_at", "approved_at", "updated_at",
+    ),
+    "email_login_codes": (
+        "id", "user_id", "email", "code_hash", "created_at", "expires_at",
+        "used_at", "attempts",
     ),
 }
 # Neu Box 0.2.2 / schema v1 的原始结构：仅在接管“已有业务表但没有
@@ -104,6 +108,9 @@ REQUIRED_INDEXES = (
     "idx_ops_events_ticket",
     "idx_ops_knowledge_created",
     "idx_ops_knowledge_kind",
+    "idx_users_email",
+    "idx_email_codes_user",
+    "idx_email_codes_email",
 )
 
 
@@ -345,17 +352,20 @@ class Database:
         import bcrypt
         return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
 
-    def create_user(self, username: str, password: str, role: str = 'user') -> str:
-        """创建用户，返回 user_id。用户名冲突返回 None。"""
+    def create_user(self, username: str, password: str, role: str = 'user',
+                    email: str = '') -> str:
+        """创建用户，返回 user_id。用户名/邮箱冲突返回 None。"""
         with self._conn() as conn:
             uid = uuid.uuid4().hex[:12]
             now = time.time()
             password_hash = self._hash_password(password)
             try:
                 conn.execute(
-                    'INSERT INTO users (id, username, password_hash, role, created_at) '
-                    'VALUES (?, ?, ?, ?, ?)',
-                    (uid, username, password_hash, role, now))
+                    'INSERT INTO users '
+                    '(id, username, password_hash, role, created_at, email) '
+                    'VALUES (?, ?, ?, ?, ?, ?)',
+                    (uid, username, password_hash, role, now,
+                     email.strip().lower() or None))
                 conn.commit()
                 return uid
             except sqlite3.IntegrityError:
@@ -376,7 +386,8 @@ class Database:
         """通过 ID 获取用户。"""
         with self._conn() as conn:
             row = conn.execute(
-                'SELECT id, username, role, created_at, is_active, last_login_at '
+                'SELECT id, username, role, created_at, is_active, last_login_at, '
+                'email, email_verified_at '
                 'FROM users WHERE id=?', (user_id,)).fetchone()
             return dict(row) if row else None
 
@@ -384,16 +395,59 @@ class Database:
         """通过用户名获取用户（不返回密码哈希）。"""
         with self._conn() as conn:
             row = conn.execute(
-                'SELECT id, username, role, created_at, is_active, last_login_at '
+                'SELECT id, username, role, created_at, is_active, last_login_at, '
+                'email, email_verified_at '
                 'FROM users WHERE username=?', (username,),
             ).fetchone()
             return dict(row) if row else None
+
+    def get_user_by_email(self, email: str) -> dict | None:
+        """通过邮箱获取用户（不返回密码哈希）。"""
+        with self._conn() as conn:
+            row = conn.execute(
+                'SELECT id, username, role, created_at, is_active, last_login_at, '
+                'email, email_verified_at '
+                'FROM users WHERE email=?', (email.strip().lower(),),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def update_email(self, user_id: str, email: str) -> bool:
+        """更新邮箱并清除验证状态；邮箱冲突返回 False。"""
+        normalized = email.strip().lower()
+        with self._conn() as conn:
+            try:
+                cursor = conn.execute(
+                    'UPDATE users SET email=?, email_verified_at=NULL WHERE id=?',
+                    (normalized or None, user_id))
+                conn.commit()
+                return cursor.rowcount > 0
+            except sqlite3.IntegrityError:
+                return False
+
+    def mark_email_verified(self, user_id: str) -> bool:
+        with self._conn() as conn:
+            cursor = conn.execute(
+                'UPDATE users SET email_verified_at=? WHERE id=?',
+                (time.time(), user_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def list_admin_emails(self) -> list[str]:
+        """所有启用且填写了邮箱的管理员邮箱。"""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT email FROM users "
+                "WHERE role='admin' AND is_active=1 "
+                "AND email IS NOT NULL AND email != ''"
+            ).fetchall()
+            return [str(row['email']) for row in rows]
 
     def list_users(self) -> list[dict]:
         """列出所有用户（不含密码哈希）。"""
         with self._conn() as conn:
             rows = conn.execute(
-                'SELECT id, username, role, created_at, is_active, last_login_at '
+                'SELECT id, username, role, created_at, is_active, last_login_at, '
+                'email, email_verified_at '
                 'FROM users ORDER BY created_at'
             ).fetchall()
             return [dict(r) for r in rows]
@@ -526,6 +580,66 @@ class Database:
             cursor = conn.execute(
                 'DELETE FROM user_credentials WHERE user_id=? AND node_name=?',
                 (user_id, node_name))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    # ═══════════════════════════════════════════════════════
+    # Email login codes（邮箱验证码登录）
+    # ═══════════════════════════════════════════════════════
+
+    def clear_email_codes(self, user_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                'DELETE FROM email_login_codes WHERE user_id=?', (user_id,))
+            conn.commit()
+
+    def create_email_code(self, user_id: str, email: str, code_hash: str,
+                          expires_at: float) -> str:
+        with self._conn() as conn:
+            code_id = uuid.uuid4().hex[:16]
+            conn.execute(
+                'INSERT INTO email_login_codes '
+                '(id, user_id, email, code_hash, created_at, expires_at) '
+                'VALUES (?, ?, ?, ?, ?, ?)',
+                (code_id, user_id, email.strip().lower(), code_hash,
+                 time.time(), expires_at))
+            conn.commit()
+            return code_id
+
+    def latest_email_code_at(self, user_id: str) -> float | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                'SELECT created_at FROM email_login_codes '
+                'WHERE user_id=? ORDER BY created_at DESC LIMIT 1',
+                (user_id,)).fetchone()
+            return float(row['created_at']) if row else None
+
+    def get_email_code(self, user_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                'SELECT * FROM email_login_codes '
+                'WHERE user_id=? AND used_at IS NULL '
+                'ORDER BY created_at DESC LIMIT 1',
+                (user_id,)).fetchone()
+            return dict(row) if row else None
+
+    def increment_email_code_attempts(self, code_id: str) -> int:
+        with self._conn() as conn:
+            conn.execute(
+                'UPDATE email_login_codes SET attempts=attempts+1 WHERE id=?',
+                (code_id,))
+            conn.commit()
+            row = conn.execute(
+                'SELECT attempts FROM email_login_codes WHERE id=?',
+                (code_id,)).fetchone()
+            return int(row['attempts']) if row else 0
+
+    def consume_email_code(self, code_id: str) -> bool:
+        with self._conn() as conn:
+            cursor = conn.execute(
+                'UPDATE email_login_codes SET used_at=? '
+                'WHERE id=? AND used_at IS NULL',
+                (time.time(), code_id))
             conn.commit()
             return cursor.rowcount > 0
 

@@ -84,11 +84,85 @@ async function request(path, options = {}) {
   }
 }
 
+async function postStream(path, body, onEvent, options = {}) {
+  const { signal, timeout = 0 } = options
+  const controller = new AbortController()
+  let timedOut = false
+  let timeoutId = null
+  const requestSignal = controller.signal
+  if (signal) {
+    if (signal.aborted) controller.abort(signal.reason)
+    else signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true })
+  }
+  if (timeout > 0) {
+    timeoutId = setTimeout(() => { timedOut = true; controller.abort() }, timeout)
+  }
+
+  try {
+    const resp = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: requestSignal,
+    })
+    if (resp.status === 401 && !location.pathname.startsWith('/login')) {
+      window.dispatchEvent(new CustomEvent('neu:unauthorized'))
+    }
+    if (!resp.ok) {
+      let message = `HTTP ${resp.status}`
+      try {
+        const payload = await resp.json()
+        if (payload && payload.error) message = payload.error
+      } catch { /* 非 JSON */ }
+      throw new ApiError(resp.status, message, null)
+    }
+    if (!resp.body) throw new ApiError(0, '浏览器不支持流式响应', null)
+
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      buffer = buffer.replace(/\r\n/g, '\n')
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary >= 0) {
+        const chunk = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
+        const data = chunk.split('\n')
+          .filter(line => line.startsWith('data:'))
+          .map(line => line.slice(5).trimStart())
+          .join('\n')
+        if (data) {
+          let event = null
+          try { event = JSON.parse(data) } catch { /* 忽略损坏事件 */ }
+          if (event) {
+            if (event.type === 'error') {
+              throw new ApiError(0, event.message || 'AI 请求失败', event)
+            }
+            onEvent && onEvent(event)
+          }
+        }
+        boundary = buffer.indexOf('\n\n')
+      }
+    }
+  } catch (error) {
+    if (timedOut && error && error.name === 'AbortError') {
+      throw new ApiError(0, '请求超时', null)
+    }
+    throw error
+  } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId)
+  }
+}
+
 export const api = {
   get: (path, opts) => request(path, { ...opts, method: 'GET' }),
   post: (path, body, opts) => request(path, { ...opts, method: 'POST', body }),
   put: (path, body, opts) => request(path, { ...opts, method: 'PUT', body }),
   delete: (path, body, opts) => request(path, { ...opts, method: 'DELETE', body }),
+  stream: postStream,
 
   /** 以纯文本全量拉取（带进度回调），用于大日志。 */
   getTextWithProgress: (path, onProgress, signal) => new Promise((resolve, reject) => {

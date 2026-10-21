@@ -6,9 +6,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import queue
+import threading
 
-from flask import Blueprint, request
+from flask import Blueprint, Response, request, stream_with_context
 
 from neuops.master.api.auth import get_current_user, login_required
 from neuops.master.api.permissions import require_admin
@@ -177,6 +180,49 @@ def assistant_suggest():
         return _respond_error(exc)
 
 
+@ops_bp.post("/assistant/agent")
+@login_required
+def assistant_agent():
+    """SSE 流：实时输出 AI 只读工具调用进度和最终建议。"""
+    user = get_current_user()
+    data = _json_body()
+    events: queue.Queue = queue.Queue()
+
+    def on_event(event: dict) -> None:
+        events.put(event)
+
+    def run() -> None:
+        try:
+            result = service.assistant_suggest(
+                user, data, on_event=on_event)
+            events.put({"type": "result", "result": result})
+        except Exception as exc:
+            events.put({"type": "error", "message": str(exc)})
+        finally:
+            events.put(None)
+
+    threading.Thread(
+        target=run, daemon=True, name="neuops-ai-agent",
+    ).start()
+
+    def generate():
+        while True:
+            event = events.get()
+            if event is None:
+                break
+            yield "data: " + json.dumps(
+                event, ensure_ascii=False) + "\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @ops_bp.get("/knowledge")
 @login_required
 def list_knowledge():
@@ -197,6 +243,28 @@ def list_knowledge():
 def get_knowledge(knowledge_id: str):
     try:
         return service.get_knowledge(knowledge_id), 200
+    except Exception as exc:
+        return _respond_error(exc)
+
+
+@ops_bp.put("/knowledge/<knowledge_id>")
+@require_admin
+def update_knowledge(knowledge_id: str):
+    """管理员直接修改知识库条目，不经过工单审批。"""
+    try:
+        return service.update_knowledge(
+            get_current_user(), knowledge_id, _json_body()), 200
+    except Exception as exc:
+        return _respond_error(exc)
+
+
+@ops_bp.delete("/knowledge/<knowledge_id>")
+@require_admin
+def delete_knowledge(knowledge_id: str):
+    """管理员直接删除知识库条目，不经过工单审批。"""
+    try:
+        service.delete_knowledge(get_current_user(), knowledge_id)
+        return {"message": "知识条目已删除"}, 200
     except Exception as exc:
         return _respond_error(exc)
 

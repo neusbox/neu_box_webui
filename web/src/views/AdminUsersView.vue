@@ -13,7 +13,7 @@ const users = ref([])
 const loading = ref(false)
 
 const createOpen = ref(false)
-const createForm = ref({ username: '', password: '', role: 'user' })
+const createForm = ref({ username: '', password: '', email: '', role: 'user' })
 
 const resetOpen = ref(false)
 const resetTarget = ref(null)
@@ -41,11 +41,12 @@ async function createUser() {
     await api.post('/admin/users', {
       username: f.username.trim(),
       password: f.password,
+      email: f.email.trim(),
       role: f.role,
     })
     toast(`用户 "${f.username.trim()}" 已创建`, 'success')
     createOpen.value = false
-    createForm.value = { username: '', password: '', role: 'user' }
+    createForm.value = { username: '', password: '', email: '', role: 'user' }
     load()
   } catch (e) {
     toast(e.message, 'error')
@@ -124,6 +125,7 @@ onMounted(load)
             <thead>
               <tr>
                 <th>用户名</th>
+                <th>邮箱</th>
                 <th>角色</th>
                 <th>状态</th>
                 <th>创建时间</th>
@@ -136,6 +138,7 @@ onMounted(load)
                 <td>
                   <div class="cell-main mono">{{ u.username }}</div>
                 </td>
+                <td class="text-3 small mono">{{ u.email || '—' }}</td>
                 <td>
                   <select class="select" style="width:96px;padding:4px 8px;font-size:12px"
                           :value="u.role" @change="changeRole(u, $event.target.value)">
@@ -179,6 +182,11 @@ onMounted(load)
         <label class="field-label">初始密码 <span class="field-hint">至少 4 位</span></label>
         <input v-model="createForm.password" type="password" class="input"
                autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label class="field-label">邮箱 <span class="field-hint">用于验证码登录和审批通知，可选</span></label>
+        <input v-model="createForm.email" type="email" class="input"
+               placeholder="user@qq.com" autocomplete="off">
       </div>
       <div class="field">
         <label class="field-label">角色</label>

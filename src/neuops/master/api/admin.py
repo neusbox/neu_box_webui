@@ -5,7 +5,11 @@ import re
 
 from flask import Blueprint, request
 
-from neuops.master.api.auth import get_current_user
+from neuops.master.api.auth import (
+    _normalize_email,
+    _validate_email,
+    get_current_user,
+)
 from neuops.master.api.permissions import require_admin
 from neuops.master.services.db import Database
 
@@ -50,6 +54,7 @@ def create_user():
     username = (data.get('username') or '').strip()
     password = data.get('password') or ''
     role = (data.get('role') or 'user').strip()
+    email = _normalize_email(data.get('email') or '')
 
     if not _USERNAME_RE.match(username):
         return {'error': '用户名需为 2-32 位字母/数字/_.- '}, 400
@@ -57,10 +62,12 @@ def create_user():
         return {'error': '密码至少 4 位'}, 400
     if role not in ('user', 'admin'):
         return {'error': '角色只能是 user 或 admin'}, 400
+    if email and _validate_email(email):
+        return {'error': _validate_email(email)}, 400
 
-    uid = _db().create_user(username, password, role=role)
+    uid = _db().create_user(username, password, role=role, email=email)
     if not uid:
-        return {'error': f'用户名 "{username}" 已存在'}, 409
+        return {'error': f'用户名或邮箱 "{username}" 已存在'}, 409
     logger.info('管理员创建用户: %s (%s)', username, role)
     return {'id': uid, 'message': f'用户 "{username}" 已创建'}, 201
 

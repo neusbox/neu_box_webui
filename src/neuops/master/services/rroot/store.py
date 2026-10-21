@@ -573,11 +573,52 @@ class OpsStore:
             )
             conn.commit()
 
-    def find_knowledge_hash(self, digest: str) -> dict | None:
+    def update_knowledge(self, knowledge_id: str, *, title: str,
+                         content: str, kind: str, tags: list[str],
+                         content_hash: str) -> dict | None:
         with _db().connection() as conn:
-            row = conn.execute(
-                "SELECT * FROM ops_knowledge WHERE content_hash=?", (digest,),
-            ).fetchone()
+            try:
+                cursor = conn.execute(
+                    "UPDATE ops_knowledge SET title=?, content=?, kind=?, "
+                    "tags=?, content_hash=?, updated_at=? WHERE id=?",
+                    (
+                        title, content, kind,
+                        json.dumps(tags, ensure_ascii=False),
+                        content_hash, now(), knowledge_id,
+                    ),
+                )
+                conn.commit()
+            except sqlite3.IntegrityError:
+                return None
+            if cursor.rowcount != 1:
+                return None
+        self.reindex_knowledge(knowledge_id)
+        return self.get_knowledge(knowledge_id)
+
+    def delete_knowledge(self, knowledge_id: str) -> bool:
+        with _db().connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM ops_knowledge WHERE id=?", (knowledge_id,))
+            conn.execute(
+                "DELETE FROM ops_knowledge_fts WHERE knowledge_id=?",
+                (knowledge_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def find_knowledge_hash(self, digest: str,
+                            exclude_id: str = "") -> dict | None:
+        with _db().connection() as conn:
+            if exclude_id:
+                row = conn.execute(
+                    "SELECT * FROM ops_knowledge "
+                    "WHERE content_hash=? AND id != ?",
+                    (digest, exclude_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM ops_knowledge WHERE content_hash=?",
+                    (digest,),
+                ).fetchone()
         return self.get_knowledge(str(row["id"])) if row else None
 
 

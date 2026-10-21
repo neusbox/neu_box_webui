@@ -78,6 +78,56 @@ async function learn() {
   }
 }
 
+// ── 管理员直接编辑/删除（不经过审批） ──────────────────────
+const editOpen = ref(false)
+const editBusy = ref(false)
+const editTarget = ref(null)
+const editForm = reactive({ title: '', content: '', kind: 'experience', tags: '' })
+
+function openEdit(item) {
+  editTarget.value = item
+  editForm.title = item.title || ''
+  editForm.content = item.content || ''
+  editForm.kind = item.kind || 'experience'
+  editForm.tags = (item.tags || []).join(', ')
+  editOpen.value = true
+}
+
+async function saveEdit() {
+  if (!editForm.title.trim() || !editForm.content.trim()) {
+    toast('标题和内容不能为空', 'error')
+    return
+  }
+  editBusy.value = true
+  try {
+    await api.put(`/ops/knowledge/${editTarget.value.id}`, {
+      title: editForm.title.trim(),
+      content: editForm.content.trim(),
+      kind: editForm.kind,
+      tags: editForm.tags.split(',').map(s => s.trim()).filter(Boolean),
+    })
+    editOpen.value = false
+    toast('知识条目已更新', 'success')
+    await loadKnowledge()
+  } catch (e) {
+    toast(e.message, 'error')
+  } finally {
+    editBusy.value = false
+  }
+}
+
+async function removeKnowledge(item) {
+  if (!window.confirm(`确定删除知识条目「${item.title}」？此操作不可恢复。`)) return
+  try {
+    await api.delete(`/ops/knowledge/${item.id}`)
+    toast('知识条目已删除', 'success')
+    if (selected.value?.id === item.id) selected.value = null
+    await loadKnowledge()
+  } catch (e) {
+    toast(e.message, 'error')
+  }
+}
+
 // ── 新建知识候选 ────────────────────────────────────────────
 const createOpen = ref(false)
 const createBusy = ref(false)
@@ -171,6 +221,16 @@ async function submitCreate() {
             <span v-for="tag in item.tags || []" :key="tag" class="tag">{{ tag }}</span>
             <span class="spacer" />
             <span class="text-3">{{ formatTime(item.approved_at) }}</span>
+            <template v-if="isAdmin">
+              <button class="btn btn-ghost btn-icon" title="编辑"
+                      @click.stop="openEdit(item)">
+                <Icon name="edit" :size="13" />
+              </button>
+              <button class="btn btn-ghost btn-icon" title="删除"
+                      @click.stop="removeKnowledge(item)">
+                <Icon name="trash" :size="13" />
+              </button>
+            </template>
           </div>
           <div class="kb-content">{{ item.content }}</div>
           <div class="cell-sub">
@@ -217,6 +277,40 @@ async function submitCreate() {
           批准人：{{ selected.approved_by || '—' }} ·
           {{ formatTime(selected.approved_at) }}
         </div>
+      </template>
+    </Modal>
+
+    <!-- 管理员编辑知识 -->
+    <Modal v-model="editOpen" title="编辑知识条目" wide>
+      <div class="field">
+        <label class="field-label">标题</label>
+        <input v-model="editForm.title" class="input">
+      </div>
+      <div class="input-row">
+        <div class="field">
+          <label class="field-label">类型</label>
+          <select v-model="editForm.kind" class="select">
+            <option value="experience">经验</option>
+            <option value="runbook">操作手册</option>
+            <option value="constraint">约束</option>
+            <option value="faq">常见问题</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label">标签（逗号分隔）</label>
+          <input v-model="editForm.tags" class="input">
+        </div>
+      </div>
+      <div class="field">
+        <label class="field-label">内容</label>
+        <textarea v-model="editForm.content" class="textarea" rows="10" />
+        <div class="field-hint">管理员修改直接生效，不需要走工单审批。</div>
+      </div>
+      <template #footer>
+        <button class="btn" @click="editOpen = false">取消</button>
+        <button class="btn btn-primary" :disabled="editBusy" @click="saveEdit">
+          {{ editBusy ? '保存中…' : '保存修改' }}
+        </button>
       </template>
     </Modal>
 

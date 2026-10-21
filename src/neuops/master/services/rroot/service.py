@@ -15,10 +15,12 @@ import os
 import sqlite3
 import threading
 
+from neuops.master.services.mailer import notify_admins_new_command_ticket
 from neuops.master.services.nodes_pool import Nodes_Pool
 
 from .ai import ai_configured, ai_model_name, extract_knowledge, suggest_command
 from .executor import start_execution
+from .tools import tool_user_for
 from .security import (
     KNOWLEDGE_KINDS,
     MAX_REQUEST_CHARS,
@@ -49,6 +51,13 @@ def _auto_learn() -> bool:
     return os.getenv("NEUOPS_OPS_AUTO_LEARN", "1").lower() in {
         "1", "true", "yes", "on",
     }
+
+
+def _notify_new_command(ticket: dict) -> None:
+    try:
+        notify_admins_new_command_ticket(ticket)
+    except Exception:
+        logger.exception("命令工单邮件通知失败: %s", ticket.get("id"))
 
 
 def _is_admin(user: dict | None) -> bool:
@@ -230,6 +239,8 @@ def create_ticket(user: dict, data: dict, *, default_status: str = "pending") ->
     })
     if status == "pending":
         store.append_event(ticket["id"], _username(user), "ticket_submitted", {})
+        if kind == "command":
+            _notify_new_command(ticket)
     return ticket
 
 
@@ -366,6 +377,8 @@ def submit_ticket(user: dict, ticket_id: str) -> dict:
     if not changed:
         raise ValidationError("提交失败，请刷新后重试")
     store.append_event(ticket_id, _username(user), "ticket_submitted", {})
+    if ticket.get("kind") == "command":
+        _notify_new_command(store.get_ticket(ticket_id) or ticket)
     return get_ticket(user, ticket_id)
 
 
@@ -582,7 +595,7 @@ def execute_ticket(user: dict, ticket_id: str) -> dict:
 # AI 命令建议（只返回建议，不创建工单、不执行）
 # ═══════════════════════════════════════════════════════════════
 
-def assistant_suggest(user: dict, data: dict) -> dict:
+def assistant_suggest(user: dict, data: dict, on_event=None) -> dict:
     """根据新建工单表单里的需求 + 节点环境生成命令建议。
 
     该接口不创建工单，也不触发执行；用户确认并提交工单后，命令仍需
@@ -616,6 +629,8 @@ def assistant_suggest(user: dict, data: dict) -> dict:
     suggestion = suggest_command(
         request=request, node=node, history=history,
         knowledge=knowledge, username=_username(user),
+        tool_user=tool_user_for(user, node),
+        on_event=on_event,
     )
     return {"suggestion": suggestion, "warning": ""}
 
@@ -634,6 +649,61 @@ def get_knowledge(knowledge_id: str) -> dict:
     if not item:
         raise LookupError("知识条目不存在")
     return item
+
+
+def update_knowledge(user: dict, knowledge_id: str, data: dict) -> dict:
+    """管理员直接修改已入库知识，不再走审批流程。"""
+    if not _is_admin(user):
+        raise PermissionError("只有管理员可以修改知识库")
+    store = ops_store()
+    item = store.get_knowledge(knowledge_id)
+    if not item:
+        raise LookupError("知识条目不存在")
+    merged = {
+        "title": data.get("title", item.get("title")),
+        "content": data.get("content", item.get("content")),
+        "kind": data.get("kind", item.get("kind")),
+        "tags": data.get("tags", item.get("tags") or []),
+        "source_ticket_ids": item.get("source_ticket_ids") or [],
+    }
+    payload = _knowledge_payload(merged)
+    duplicate = store.find_knowledge_hash(
+        payload["content_hash"], exclude_id=knowledge_id)
+    if duplicate:
+        raise ValidationError("知识库中已存在相同内容")
+    updated = store.update_knowledge(
+        knowledge_id,
+        title=payload["title"],
+        content=payload["content"],
+        kind=payload["kind"],
+        tags=payload["tags"],
+        content_hash=payload["content_hash"],
+    )
+    if not updated:
+        raise ValidationError("知识更新失败（内容可能重复）")
+    if item.get("ticket_id"):
+        store.append_event(
+            item["ticket_id"], _username(user), "knowledge_updated",
+            {"title": updated["title"], "kind": updated["kind"]},
+        )
+    return updated
+
+
+def delete_knowledge(user: dict, knowledge_id: str) -> None:
+    """管理员直接删除知识库条目，不再走审批流程。"""
+    if not _is_admin(user):
+        raise PermissionError("只有管理员可以删除知识库")
+    store = ops_store()
+    item = store.get_knowledge(knowledge_id)
+    if not item:
+        raise LookupError("知识条目不存在")
+    if not store.delete_knowledge(knowledge_id):
+        raise LookupError("知识条目不存在")
+    if item.get("ticket_id"):
+        store.append_event(
+            item["ticket_id"], _username(user), "knowledge_deleted",
+            {"title": item.get("title", "")},
+        )
 
 
 def _already_learning(ticket_id: str) -> bool:

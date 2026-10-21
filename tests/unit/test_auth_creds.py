@@ -67,10 +67,13 @@ def env(tmp_path, monkeypatch):
 
 def test_register_success_and_auto_login(env):
     client = env["client"]
-    resp = client.post("/auth/register",
-                       json={"username": "charlie", "password": "charlie1"})
+    resp = client.post("/auth/register", json={
+        "username": "charlie", "password": "charlie1",
+        "email": "charlie@example.com",
+    })
     assert resp.status_code == 201, resp.get_json()
     assert resp.get_json()["user"]["role"] == "user"
+    assert resp.get_json()["user"]["email"] == "charlie@example.com"
 
     me = client.get("/auth/me")
     assert me.status_code == 200
@@ -78,27 +81,37 @@ def test_register_success_and_auto_login(env):
 
 
 def test_register_duplicate_username(env):
-    resp = env["client"].post(
-        "/auth/register", json={"username": "alice", "password": "x1234"})
+    resp = env["client"].post("/auth/register", json={
+        "username": "alice", "password": "x1234",
+        "email": "alice2@example.com",
+    })
     assert resp.status_code == 409
 
 
 def test_register_validation(env):
     client = env["client"]
     # 2 位用户名合法（与管理员建号规则一致）
-    assert client.post("/auth/register",
-                       json={"username": "li", "password": "x1234"}
-                       ).status_code == 201
+    assert client.post("/auth/register", json={
+        "username": "li", "password": "x1234",
+        "email": "li@example.com",
+    }).status_code == 201
     # 1 位太短
-    assert client.post("/auth/register",
-                       json={"username": "a", "password": "x1234"}
-                       ).status_code == 400
-    assert client.post("/auth/register",
-                       json={"username": "valid_name", "password": "123"}
-                       ).status_code == 400
-    assert client.post("/auth/register",
-                       json={"username": "bad name!", "password": "x1234"}
-                       ).status_code == 400
+    assert client.post("/auth/register", json={
+        "username": "a", "password": "x1234",
+        "email": "a@example.com",
+    }).status_code == 400
+    assert client.post("/auth/register", json={
+        "username": "valid_name", "password": "123",
+        "email": "valid@example.com",
+    }).status_code == 400
+    assert client.post("/auth/register", json={
+        "username": "bad name!", "password": "x1234",
+        "email": "bad@example.com",
+    }).status_code == 400
+    # 邮箱必填且格式正确
+    assert client.post("/auth/register", json={
+        "username": "no_mail", "password": "x1234",
+    }).status_code == 400
 
 
 def test_register_can_be_disabled(env, monkeypatch):
@@ -282,3 +295,67 @@ def test_admin_sees_all_labels(env):
     _login(client, "root")
     queue = client.get(f"/tasks?node_id={NODE_ID}").get_json()["queue"]
     assert {t["task_id"] for t in queue} == {"t-alice", "t-bob", "t-al"}
+
+
+# ═══════════════════════════════════════════════════════════════
+# 邮箱与验证码登录
+# ═══════════════════════════════════════════════════════════════
+
+def test_old_user_can_add_email_and_login_with_code(env, monkeypatch):
+    client = env["client"]
+    _login(client, "alice")
+
+    resp = client.put("/auth/email", json={"email": "alice@example.com"})
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.get_json()["user"]["email"] == "alice@example.com"
+
+    captured = {}
+    from neuops.master.api import auth as auth_module
+
+    def fake_send(email, code, ttl):
+        captured.update(email=email, code=code, ttl=ttl)
+
+    monkeypatch.setattr(auth_module, "send_login_code", fake_send)
+    client.post("/auth/logout")
+
+    resp = client.post("/auth/email-code", json={"email": "alice@example.com"})
+    assert resp.status_code == 200, resp.get_json()
+    assert captured["email"] == "alice@example.com"
+    assert len(captured["code"]) == 6
+
+    resp = client.post("/auth/email-login", json={
+        "email": "alice@example.com", "code": captured["code"],
+    })
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.get_json()["user"]["username"] == "alice"
+    me = client.get("/auth/me")
+    assert me.get_json()["user"]["email_verified_at"]
+
+
+def test_email_code_login_rejects_wrong_code(env, monkeypatch):
+    client = env["client"]
+    _login(client, "alice")
+    client.put("/auth/email", json={"email": "alice@example.com"})
+    client.post("/auth/logout")
+
+    from neuops.master.api import auth as auth_module
+    monkeypatch.setattr(auth_module, "send_login_code",
+                        lambda email, code, ttl: None)
+    assert client.post("/auth/email-code",
+                       json={"email": "alice@example.com"}).status_code == 200
+    resp = client.post("/auth/email-login", json={
+        "email": "alice@example.com", "code": "000000",
+    })
+    assert resp.status_code == 401
+
+
+def test_email_code_request_does_not_reveal_unknown_email(env, monkeypatch):
+    client = env["client"]
+    from neuops.master.api import auth as auth_module
+    called = []
+    monkeypatch.setattr(auth_module, "send_login_code",
+                        lambda *args: called.append(args))
+    resp = client.post("/auth/email-code",
+                       json={"email": "nobody@example.com"})
+    assert resp.status_code == 200
+    assert called == []

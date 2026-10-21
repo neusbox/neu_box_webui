@@ -95,3 +95,31 @@ def test_approved_knowledge_is_marked_trusted():
     assert "TRUSTED_KNOWLEDGE" in block
     assert "useradd -m pengyt" in block
     assert "UNTRUSTED_DATA" not in block
+
+
+def test_empty_json_object_falls_through_to_next_attempt(monkeypatch):
+    monkeypatch.setenv("NEUOPS_AI_ENABLED", "1")
+    monkeypatch.setenv("NEUOPS_AI_API_KEY", "test-key")
+    monkeypatch.setenv("NEUOPS_AI_MODEL", "test-model")
+
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(json)
+        if len(calls) < 3:
+            return _Resp({
+                "choices": [{"message": {"content": "{}"}}],
+            })
+        return _Resp({
+            "choices": [{
+                "message": {"content": '{"reply":"ok","command":"id"}'},
+            }],
+        })
+
+    import neuops.master.services.rroot.ai as ai_module
+    monkeypatch.setattr(ai_module.requests, "post", fake_post)
+
+    out = AIClient().complete_json("SYSTEM", "USER")
+    assert json.loads(out)["command"] == "id"
+    assert len(calls) == 3
+    assert calls[2].get("response_format") == {"type": "json_object"}

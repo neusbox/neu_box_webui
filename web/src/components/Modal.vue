@@ -7,6 +7,8 @@ const props = defineProps({
   title: { type: String, default: '' },
   wide: Boolean,
   closable: { type: Boolean, default: true },
+  // 默认点击遮罩不关闭，避免表单填到一半误触丢失内容。
+  maskClosable: { type: Boolean, default: false },
 })
 const emit = defineEmits(['update:modelValue', 'close'])
 
@@ -19,7 +21,7 @@ function close() {
 
 <template>
   <Teleport to="body">
-    <div v-if="modelValue" class="modal-overlay" @click.self="close">
+    <div v-if="modelValue" class="modal-overlay" @click.self="maskClosable && close()">
       <div class="modal" :class="{ wide }">
         <div class="modal-head">
           <slot name="title">{{ title }}</slot>

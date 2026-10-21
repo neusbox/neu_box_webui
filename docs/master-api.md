@@ -28,9 +28,12 @@ NeuOps 对**浏览器前端**（Vue SPA，构建产物在 `master/static/`）暴
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/auth/register` | 自助注册 `{username, password}`（普通用户角色，成功后自动登录）；开关关闭 403 |
+| POST | `/auth/register` | 自助注册 `{username, password, email}`（邮箱必填，普通用户角色，成功后自动登录）；开关关闭 403 |
 | GET | `/auth/register` | 注册开关状态 `{allowed}`（登录页据此显示/隐藏注册入口） |
 | POST | `/auth/login` | `{username, password}` → 建立 session；更新 `last_login_at`；停用账号拒绝 |
+| POST | `/auth/email-code` | `{email}` → 发送 6 位邮箱验证码（不泄露邮箱是否存在） |
+| POST | `/auth/email-login` | `{email, code}` → 邮箱验证码登录，成功后标记 `email_verified_at` |
+| PUT | `/auth/email` | 登录用户补充/修改自己的邮箱；邮箱唯一 |
 | GET | `/auth/me` | 当前用户；未登录 401 |
 | POST | `/auth/logout` | 注销 |
 | PUT | `/auth/password` | `{old_password, new_password}` |
@@ -129,8 +132,11 @@ WebUI 用户名）。密码 Fernet 加密存于 master（密钥由 `SECRET_KEY` 
 | POST | `/ops/tickets/<id>/execute` | 管理员执行已批准命令（单次） |
 | GET | `/ops/tickets/<id>/log` | 执行日志（`?raw=1` 纯文本） |
 | POST | `/ops/assistant/suggest` | 根据 `{node_id, request}` 生成命令建议；不创建工单、不执行 |
+| POST | `/ops/assistant/agent` | SSE 流：AI 只读工具调用进度 + 最终命令建议 |
 | GET | `/ops/knowledge` | 已批准知识列表 |
 | GET | `/ops/knowledge/<id>` | 知识详情 |
+| PUT | `/ops/knowledge/<id>` | **仅管理员**直接修改知识条目，不经过审批 |
+| DELETE | `/ops/knowledge/<id>` | **仅管理员**直接删除知识条目，不经过审批 |
 | POST | `/ops/knowledge/learn` | 管理员手动触发学习 |
 
 ## 健康检查
@@ -139,7 +145,7 @@ WebUI 用户名）。密码 Fernet 加密存于 master（密钥由 `SECRET_KEY` 
 
 ```json
 {"status":"ok","service":"neuops","role":"master","api_version":2,
- "version":"0.2.0","schema_version":4}
+ "version":"0.2.0","schema_version":5}
 ```
 
 ## 与 worker 的兼容

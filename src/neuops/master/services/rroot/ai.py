@@ -31,6 +31,12 @@ from .security import (
     untrusted_block,
     validate_command,
 )
+from .tools import (  # noqa: E402
+    MAX_STEPS,
+    TOOL_DESCRIPTIONS,
+    TOOL_NAMES,
+    execute_tool,
+)
 
 
 logger = logging.getLogger("master.rroot.ai")
@@ -247,6 +253,12 @@ class AIClient:
                     raise AIError("AI 返回内容不是字符串", status_code=422)
                 candidate = self._ensure_json_prefix(content)
                 candidate = self._trim_to_json_object(candidate)
+                if candidate.strip() in {"{}", "[]"}:
+                    logger.warning(
+                        "AI 返回空 JSON 对象（prefill=%s prefix=%s json_mode=%s）",
+                        prefill, prefix, response_format,
+                    )
+                    raise AIError("AI 返回空 JSON 对象", status_code=422)
                 try:
                     json.loads(candidate)
                 except ValueError as exc:
@@ -326,6 +338,21 @@ JSON schema:
 
 即使 needs_clarification 为 true，也必须给出一个候选 command；澄清信息放在
 reply / risk_notes 中，不能把 command 留空。
+"""
+
+_AGENT_SYSTEM_PROMPT = _SYSTEM_PROMPT + """
+
+你还可以调用服务器上的只读工具来查看状态。工具由服务端执行，你只输出
+结构化调用，不要输出 Shell 命令让服务端直接执行。
+
+""" + TOOL_DESCRIPTIONS + """
+每轮只输出一个 JSON：
+- 工具调用：{"type":"tool","tool":"ls","args":{"path":"/var/log"}}
+- 最终建议：{"type":"final","suggestion":{...与最终命令 schema 相同...}}
+
+优先用少量、精准的只读工具确认环境，然后给出最终命令。工具结果可能被
+截断；不要请求写操作、sudo 或交互式命令。工具轮数有限，信息足够后立即
+输出 final。
 """
 
 
@@ -462,10 +489,37 @@ def _has_executable_command(suggestion: dict) -> bool:
     return command.strip().lower() not in _EMPTY_COMMANDS
 
 
+def _extract_tool_call(raw: dict) -> tuple[str, dict] | None:
+    """兼容多种模型的工具调用形状，避免把工具调用误判成 final。"""
+    candidates: list[dict] = []
+    if isinstance(raw.get("tool_calls"), list):
+        candidates.extend(item for item in raw["tool_calls"]
+                          if isinstance(item, dict))
+    if isinstance(raw.get("tool_call"), dict):
+        candidates.append(raw["tool_call"])
+    candidates.append(raw)
+    for item in candidates:
+        tool = item.get("tool") or item.get("name") or item.get("tool_name")
+        if not isinstance(tool, str) or tool not in TOOL_NAMES:
+            continue
+        args = item.get(
+            "args", item.get("arguments", item.get("parameters", {})))
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except ValueError:
+                args = {}
+        if not isinstance(args, dict):
+            args = {}
+        return tool, args
+    return None
+
+
 def suggest_command(*, request: str, node: dict | None,
                     history: list[dict], knowledge: list[dict],
-                    username: str) -> dict:
-    """生成结构化建议；必须返回非空可执行命令，否则重试/报错。"""
+                    username: str, tool_user: str = "",
+                    on_event=None) -> dict:
+    """Agent 循环：AI 调用只读工具，服务端执行，最终返回命令建议。"""
     client = AIClient()
     nonce = os.urandom(8).hex()
     request = redact_secrets(clean_text(request, field="需求"))
@@ -477,31 +531,115 @@ def suggest_command(*, request: str, node: dict | None,
         f"当前用户: {username}\n"
         f"用户需求:\n{untrusted_block('user-request', request, nonce)}\n\n"
         f"上下文:\n{context}\n\n"
-        "请直接给出一个最小、可回滚、可执行的命令。信息不足时，在 reply 或"
-        " risk_notes 中写明假设和需要确认项，但不要把 command 留空；"
-        "用户会先确认再提交管理员审批。\n"
-        "请严格按系统消息中的 JSON schema 输出。"
+        "你可以先调用只读工具查看服务器状态；信息足够后输出 final。"
+        "最终 command 必须非空；信息不足时把假设写进 reply / risk_notes。"
     )
+
+    def _emit(event_type: str, **payload) -> None:
+        if not on_event:
+            return
+        try:
+            on_event({"type": event_type, **payload})
+        except Exception:
+            logger.exception("AI agent 进度回调失败")
+
     def _attempt(extra: str = "") -> dict:
-        content = client.complete_json(_SYSTEM_PROMPT, user_prompt + extra)
-        raw = _extract_json(content)
-        return _normalize_suggestion(raw)
+        content = client.complete_json(
+            _AGENT_SYSTEM_PROMPT, user_prompt + extra)
+        return _extract_json(content)
 
-    suggestion = _attempt()
-    retry_prompt = (
-        "\n\n上一次返回的 command 为空或不可执行。本次必须返回一个非空的"
-        "可执行 command；禁止只返回澄清文字，禁止使用占位符（无/N/A/null）。"
-    )
-    attempts = 0
-    while not _has_executable_command(suggestion) and attempts < 2:
-        attempts += 1
-        logger.warning("AI 建议 command 为空，进行第 %s 次重试", attempts)
-        suggestion = _attempt(retry_prompt)
-    if not _has_executable_command(suggestion):
-        raise AIError("AI 未生成可执行命令，请重试或手动填写")
-    suggestion["model"] = client.model
-    return suggestion
+    node_id = str((node or {}).get("node_id") or "")
+    cwd = "/"
+    transcript: list[str] = []
+    final_retries = 0
+    steps = 0
+    _emit("log", message="AI 正在分析需求与节点环境")
 
+    while steps < MAX_STEPS:
+        steps += 1
+        tool_context = (
+            f"\n\n当前工具工作目录: {cwd}\n"
+            f"已执行工具记录:\n"
+            + ("\n".join(transcript) if transcript else "（暂无）")
+        )
+        raw = _attempt(tool_context)
+
+        tool_call = _extract_tool_call(raw)
+        declares_tool = str(raw.get("type") or "").lower() in {
+            "tool", "tool_call", "function_call",
+        } or "tool" in raw or "name" in raw
+        if tool_call or declares_tool:
+            if tool_call:
+                tool, args = tool_call
+            else:
+                tool = str(raw.get("tool") or raw.get("name") or "")
+                args = raw.get("args") or raw.get("arguments") or {}
+                if not isinstance(args, dict):
+                    args = {}
+            _emit("tool_start", tool=tool, args=args,
+                  message=f"调用只读工具 {tool}")
+            try:
+                result = execute_tool(
+                    node_id, tool_user, tool, args, cwd)
+                cwd = str(result.get("cwd") or cwd)
+                output = str(result.get("output") or "")
+                transcript.append(
+                    f"[{tool}] args={json.dumps(args, ensure_ascii=False)} "
+                    f"cwd={cwd} exit={result.get('exit_code')}\n"
+                    f"{output[:4000]}"
+                )
+                _emit(
+                    "tool_result", tool=tool, args=args,
+                    cwd=cwd, exit_code=result.get("exit_code"),
+                    timed_out=result.get("timed_out", False),
+                    output=output[:4000],
+                    message=f"{tool} 完成",
+                )
+            except Exception as exc:
+                transcript.append(
+                    f"[{tool}] args={json.dumps(args, ensure_ascii=False)} "
+                    f"error={exc}"
+                )
+                _emit("tool_result", tool=tool, args=args,
+                      error=str(exc), message=f"{tool} 失败: {exc}")
+            continue
+
+        payload = raw.get("suggestion") if isinstance(
+            raw.get("suggestion"), dict) else raw
+        suggestion = _normalize_suggestion(payload)
+        if _has_executable_command(suggestion):
+            _emit("log", message="AI 已生成命令建议")
+            suggestion["model"] = client.model
+            return suggestion
+
+        logger.warning(
+            "AI agent 返回空命令，原始响应: %s",
+            redact_secrets(json.dumps(payload, ensure_ascii=False))[:2000],
+        )
+        final_retries += 1
+        if final_retries > 2:
+            raise AIError("AI 未生成可执行命令，请重试或手动填写")
+        _emit("log", message="AI 未给出命令，要求重新生成")
+        # 下一轮不再调用工具，避免把步数浪费在无意义的探索上。
+        user_prompt += (
+            "\n\n上一次返回了空对象或 command 为空。不要返回空对象，也不要只解释。"
+            "本次必须返回形如 "
+            '{"type":"final","suggestion":{"command":"<按需求生成的非空命令>",'
+            '"reply":"...","explanation":"...","risk_level":"low"}} '
+            "的 JSON，command 不得为空、不得使用占位符。"
+        )
+
+    # 工具步数用完，强制一次 final。
+    _emit("log", message="工具调用步数已用完，要求 AI 输出最终命令")
+    raw = _attempt(
+        "\n\n工具调用步数已用完。现在只输出 final，并给出非空可执行 command。")
+    payload = raw.get("suggestion") if isinstance(
+        raw.get("suggestion"), dict) else raw
+    suggestion = _normalize_suggestion(payload)
+    if _has_executable_command(suggestion):
+        suggestion["model"] = client.model
+        return suggestion
+    raise AIError("AI 未生成可执行命令，请重试或手动填写")
 
 def _fallback_entry(ticket: dict, reason: str) -> dict:
     """AI 不可用时的确定性学习候选，保证知识库不会因模型故障停摆。"""

@@ -115,6 +115,7 @@ const createForm = reactive({
 })
 const aiSuggesting = ref(false)
 const aiHint = ref(null)
+const aiLogs = ref([])
 
 function parseEnv(text) {
   const env = {}
@@ -138,25 +139,46 @@ function openCreate() {
   createForm.timeout = '3600'
   createForm.envText = ''
   aiHint.value = null
+  aiLogs.value = []
   createOpen.value = true
 }
 
-// 根据“需求描述 + 目标节点”生成命令建议；只填充表单，不创建工单。
+function pushAiLog(text) {
+  if (!text) return
+  aiLogs.value.push({ id: `${Date.now()}-${aiLogs.value.length}`, text })
+}
+
+// 根据“需求描述 + 目标节点”运行只读工具 Agent；只填充表单，不创建工单。
 async function suggestCommand() {
   if (!createForm.nodeId) { toast('请先选择目标节点', 'error'); return }
   if (!createForm.request.trim()) { toast('请先填写需求描述', 'error'); return }
   aiSuggesting.value = true
+  aiHint.value = null
+  aiLogs.value = []
   try {
-    const data = await api.post('/ops/assistant/suggest', {
+    await api.stream('/ops/assistant/agent', {
       node_id: createForm.nodeId,
       request: createForm.request.trim(),
+    }, (event) => {
+      if (event.type === 'log') {
+        pushAiLog(event.message || '')
+      } else if (event.type === 'tool_start') {
+        pushAiLog(`→ ${event.tool || 'tool'} ${JSON.stringify(event.args || {})}`)
+      } else if (event.type === 'tool_result') {
+        const exit = event.exit_code == null ? '?' : event.exit_code
+        const preview = String(event.output || '').trim().split('\n')[0].slice(0, 160)
+        pushAiLog(`✓ ${event.tool || 'tool'} exit=${exit}${preview ? ` · ${preview}` : ''}`)
+      } else if (event.type === 'result') {
+        const data = event.result || {}
+        aiHint.value = data
+        const command = String(data.suggestion?.command || '').trim()
+        if (command) createForm.command = command
+        pushAiLog('AI 已生成最终命令建议')
+        toast(command ? '已生成命令建议，请确认后再提交' : 'AI 未生成命令', command ? 'success' : 'error')
+      }
     })
-    aiHint.value = data
-    const command = String(data.suggestion?.command || '').trim()
-    if (command) createForm.command = command
-    if (data.warning) toast(data.warning, 'error')
-    else toast(command ? '已生成命令建议，请确认后再提交' : 'AI 需要更多信息，请补充需求', 'success')
   } catch (e) {
+    pushAiLog(`AI 失败：${e.message}`)
     toast(e.message, 'error')
   } finally {
     aiSuggesting.value = false
@@ -359,6 +381,10 @@ async function submitCreate() {
         <textarea v-model="createForm.command" class="textarea mono" rows="5"
                   placeholder="完整 Shell 命令；管理员批准前不会执行"></textarea>
         <div class="field-hint">命令将以 root 身份在目标节点执行；提交后仍需管理员审批。</div>
+      </div>
+
+      <div v-if="aiLogs.length" style="margin-bottom:14px;max-height:170px;overflow:auto;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;font-family:var(--mono);font-size:11.5px;line-height:1.6">
+        <div v-for="item in aiLogs" :key="item.id" style="white-space:pre-wrap;word-break:break-word">{{ item.text }}</div>
       </div>
 
       <div v-if="aiHint" class="card" style="margin-bottom:14px;background:var(--surface-2)">

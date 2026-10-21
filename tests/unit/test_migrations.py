@@ -27,10 +27,10 @@ from neuops.master.services.db import (
     [
         (
             MASTER_MIGRATIONS, MASTER_COLUMNS, MASTER_INDEXES,
-            (1, 2, 3, 4),
+            (1, 2, 3, 4, 5),
             [(1, "initial"), (2, "user_system"),
              (3, "node_credentials_password"),
-             (4, "ops_tickets")],
+             (4, "ops_tickets"), (5, "user_email")],
         ),
     ],
 )
@@ -275,7 +275,7 @@ def test_legacy_v1_database_can_be_adopted_with_legacy_schema(tmp_path):
         legacy_indexes=LEGACY_REQUIRED_INDEXES,
     )
     assert status.state == "current"
-    assert status.current == 4
+    assert status.current == 5
     with sqlite3.connect(database) as conn:
         tables = {
             row[0] for row in conn.execute(
@@ -286,4 +286,4 @@ def test_legacy_v1_database_can_be_adopted_with_legacy_schema(tmp_path):
                 "SELECT version FROM schema_migrations ORDER BY version")
         ]
     assert "ops_tickets" in tables
-    assert versions == [1, 2, 3, 4]
+    assert versions == [1, 2, 3, 4, 5]

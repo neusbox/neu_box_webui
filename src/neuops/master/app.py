@@ -135,10 +135,16 @@ def _init_admin() -> None:
     db = Database.get_instance()
     admin_user = env_text("ADMIN_USER", "admin")
     admin_pass = env_text("ADMIN_PASS", DEFAULT_ADMIN_PASSWORD)
-    if db.get_user_by_username(admin_user):
+    admin_email = env_text("ADMIN_EMAIL").strip().lower()
+    existing = db.get_user_by_username(admin_user)
+    if existing:
+        if admin_email and not existing.get("email"):
+            db.update_email(existing["id"], admin_email)
+            logger.info("已为管理员 %s 补充邮箱: %s", admin_user, admin_email)
         logger.info("管理员账号已存在: %s", admin_user)
         return
-    uid = db.create_user(admin_user, admin_pass, role="admin")
+    uid = db.create_user(
+        admin_user, admin_pass, role="admin", email=admin_email)
     if uid:
         logger.info(
             "已创建管理员: %s (%s)",

@@ -15,6 +15,31 @@ import { formatTime } from '../utils'
 
 const user = computed(() => auth.user)
 
+// ── 邮箱 ────────────────────────────────────────────────────
+const email = ref('')
+const emailBusy = ref(false)
+const emailMsg = ref(null)
+
+async function saveEmail() {
+  emailMsg.value = null
+  const value = email.value.trim()
+  if (!value) {
+    emailMsg.value = { type: 'error', text: '请输入邮箱' }
+    return
+  }
+  emailBusy.value = true
+  try {
+    const data = await api.put('/auth/email', { email: value })
+    auth.user = data.user
+    email.value = data.user.email || ''
+    emailMsg.value = { type: 'success', text: '邮箱已保存，可使用邮箱验证码登录' }
+  } catch (e) {
+    emailMsg.value = { type: 'error', text: e.message }
+  } finally {
+    emailBusy.value = false
+  }
+}
+
 // ── 修改密码 ────────────────────────────────────────────────
 const oldPw = ref('')
 const newPw = ref('')
@@ -161,7 +186,10 @@ async function removeCred(nodeName) {
   }
 }
 
-onMounted(loadCreds)
+onMounted(() => {
+  email.value = auth.user?.email || ''
+  loadCreds()
+})
 </script>
 
 <template>
@@ -207,6 +235,38 @@ onMounted(loadCreds)
           提交任务到节点时，若下方为该节点设置了 OS 用户名，则任务在
           节点侧以该用户名归属，否则以 WebUI 用户名归属。
         </p>
+      </div>
+    </div>
+
+    <!-- 邮箱 -->
+    <div class="card">
+      <div class="card-head">
+        <Icon name="inbox" :size="14" />
+        <span class="card-title">邮箱</span>
+        <span class="card-sub">用于登录验证码和管理员审批通知</span>
+      </div>
+      <div class="card-body">
+        <div v-if="emailMsg" style="margin-bottom:12px"
+             :class="emailMsg.type === 'error' ? 'login-error' : 'field-hint'">
+          {{ emailMsg.text }}
+        </div>
+        <div class="field">
+          <label class="field-label">登录邮箱</label>
+          <div class="row" style="gap:8px">
+            <input v-model="email" type="email" class="input mono grow"
+                   placeholder="you@qq.com" autocomplete="email">
+            <button class="btn btn-primary" :disabled="emailBusy" @click="saveEmail">
+              {{ emailBusy ? '保存中…' : '保存邮箱' }}
+            </button>
+          </div>
+          <div class="field-hint">
+            <span v-if="user?.email_verified_at" class="badge completed">
+              <span class="dot" />已验证
+            </span>
+            <span v-else-if="user?.email">未验证，使用验证码登录成功后自动标记</span>
+            <span v-else>旧用户请先填写邮箱；注册用户默认已填写。</span>
+          </div>
+        </div>
       </div>
     </div>
 

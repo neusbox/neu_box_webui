@@ -69,7 +69,7 @@ NeuOps 不制作二进制或发布压缩包。目标机需要 Python 3.11+ 和
 显示该信息。
 
 用户系统：
-- 登录页支持自助注册（默认普通用户角色），可用
+- 登录页支持自助注册（默认普通用户角色，必须填写邮箱），可用
   `NEU_BOX_ALLOW_REGISTRATION=0` 关闭；管理员/禁用账号只能由管理员
   在「用户管理」页面维护。
 - 每个用户可为每个节点保存「节点上的 OS 用户名 + 密码」（设置页 →
@@ -121,6 +121,31 @@ NEUOPS_AI_TEMPERATURE=0.2
 
 未配置 API Key 时，新建工单里的 AI 命令建议会返回明确提示，手写工单和确定性知识候选
 仍然可用。
+
+### 邮箱、验证码登录与管理员通知
+
+- 新用户注册必须填写邮箱；旧用户可在「设置 → 邮箱」补充。
+- 登录页支持「密码登录」和「邮箱验证码」两种方式；验证码默认 10 分钟有效。
+- 新的命令工单进入待审批状态后，会通过 QQ SMTP 通知所有启用且填写了邮箱的
+  管理员；通知是异步发送，不阻塞工单提交。
+
+QQ SMTP 配置：
+
+```bash
+NEUOPS_SMTP_HOST=smtp.qq.com
+NEUOPS_SMTP_PORT=465
+NEUOPS_SMTP_USER=your@qq.com
+NEUOPS_SMTP_PASSWORD=QQ邮箱授权码
+NEUOPS_SMTP_FROM=your@qq.com
+NEUOPS_SMTP_USE_SSL=1
+
+# 初始管理员邮箱（仅当管理员邮箱为空时补充）
+ADMIN_EMAIL=your@qq.com
+# 审批链接外部地址（可选）
+NEUOPS_PUBLIC_URL=http://192.168.1.10:25565
+```
+
+QQ 邮箱必须使用 SMTP **授权码**，不是 QQ 登录密码。
 
 所有默认运行状态都收拢在项目的 `runtime/` 目录，首次运行自动创建：
 

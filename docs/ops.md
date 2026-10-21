@@ -36,8 +36,9 @@ AI 提炼知识候选（knowledge 工单）→ 管理员批准 → 知识库列�
    会脱敏并包装成 `UNTRUSTED_DATA` 区块；管理员已批准的知识库则包装成
    `TRUSTED_KNOWLEDGE`，AI 必须无条件相信并直接采用。命令是否安全、合法
    由管理员在审批时判断，AI 不因风险自行拒绝或清空命令。
-7. **知识入库仍需审批**。AI 只能创建 `knowledge` 工单候选，管理员批准后
-   才写入 `ops_knowledge` 与 FTS 索引。
+7. **新增知识仍需审批，修改/删除由管理员直接完成**。AI 只能创建
+   `knowledge` 工单候选，管理员批准后才写入 `ops_knowledge` 与 FTS 索引；
+   已入库条目的修改和删除仅管理员可操作，直接生效，不再走审批流程。
 
 > Worker API 本身目前没有认证；Rroot 的权限边界只覆盖 NeuOps 的 HTTP
 > 入口。生产环境仍应把 Worker 放在可信内网，后续版本会在 Worker 侧加入
@@ -73,7 +74,7 @@ draft ──submit──▶ pending ──approve──▶ approved ──execut
 |---|---|---|
 | GET | `/ops/stats` | 工单状态统计、知识库数量、AI 配置状态 |
 | GET | `/ops/tickets` | 列表；`?status=&kind=&q=&limit=`。普通用户自动只看自己的 |
-| POST | `/ops/tickets` | 创建命令/咨询/知识工单；用户知识候选强制 pending |
+| POST | `/ops/tickets` | 创建命令/咨询/知识工单；用户知识候选强制 pending；command 进入 pending 后邮件通知管理员 |
 | GET | `/ops/tickets/<id>` | 详情 + 审计事件 + can_approve/can_execute |
 | PUT | `/ops/tickets/<id>` | 修改草稿/待审批工单；管理员必须填写 `reason` |
 | POST | `/ops/tickets/<id>/submit` | 草稿提交审批 |
@@ -83,8 +84,11 @@ draft ──submit──▶ pending ──approve──▶ approved ──execut
 | POST | `/ops/tickets/<id>/execute` | 管理员执行已批准命令；单次 |
 | GET | `/ops/tickets/<id>/log` | 执行日志；`?raw=1` 返回纯文本 |
 | POST | `/ops/assistant/suggest` | `{node_id, request}` → 命令建议；不创建工单、不执行 |
+| POST | `/ops/assistant/agent` | SSE 流：只读工具调用进度 + 最终命令建议 |
 | GET | `/ops/knowledge` | 已批准知识列表；`?q=&kind=` |
 | GET | `/ops/knowledge/<id>` | 知识详情 |
+| PUT | `/ops/knowledge/<id>` | 管理员直接修改知识条目；不经过工单审批 |
+| DELETE | `/ops/knowledge/<id>` | 管理员直接删除知识条目；不经过工单审批 |
 | POST | `/ops/knowledge/learn` | 管理员手动触发学习；`{ticket_id?}` |
 
 ### `POST /ops/tickets`
@@ -155,6 +159,24 @@ draft ──submit──▶ pending ──approve──▶ approved ──execut
 - 数据库中的 stdout/stderr 默认截断到 200000 字符
   （`NEUOPS_OPS_MAX_OUTPUT`），完整内容以日志文件为准。
 
+## AI 只读工具 Agent
+
+点击「AI命令建议」时，后端不会让 AI 直接执行 Shell，而是运行一个受控
+只读工具循环：
+
+- AI 输出 `{"type":"tool","tool":"ls","args":{...}}`
+- 服务端校验工具名和参数，重新构造命令，通过 worker `/tasks` 执行
+- 工具输出作为不可执行的数据回传给 AI
+- AI 输出 `{"type":"final","suggestion":{...}}` 后结束
+- 前端通过 `/ops/assistant/agent` 的 SSE 流显示简洁工具日志
+
+工具白名单：`pwd`、`cd`、`ls`、`cat`、`head`、`tail`、`stat`、`du`、
+`df`、`ps`、`grep`、`find`。全部只读，禁止 `sudo`、写操作和交互式命令。
+
+工具默认使用当前用户在该节点上的凭据身份（与普通任务一致），不会
+自动使用 root；可用 `NEUOPS_AGENT_TOOL_USER` 显式指定专用只读账号。
+单次请求最多 `NEUOPS_AGENT_MAX_STEPS`（默认 5）步工具调用。
+
 ## AI 配置
 
 OpenAI 兼容接口：
@@ -214,3 +236,16 @@ OpenAI 使用 `https://api.openai.com/v1`，`gpt-4o-mini` 本身不支持旧版
 
 可用 `NEUOPS_OPS_AUTO_LEARN=0` 关闭自动候选；
 `NEUOPS_OPS_LEARN_SYNC=1` 仅用于测试同步学习。
+
+Agent 工具相关环境变量：
+
+```bash
+# 只读工具执行身份；留空则使用用户在节点上的凭据用户名
+# NEUOPS_AGENT_TOOL_USER=
+# 工具任务超时（秒）
+# NEUOPS_AGENT_TOOL_TIMEOUT=60
+# 单次 AI 建议最多工具步数
+# NEUOPS_AGENT_MAX_STEPS=5
+# 工具任务优先级（0 普通 / 1 赶论文）
+# NEUOPS_AGENT_TOOL_PRIORITY=1
+```

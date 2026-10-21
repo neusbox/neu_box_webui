@@ -29,9 +29,19 @@ async function login(username, password) {
   return data.user
 }
 
-async function register(username, password) {
-  const data = await api.post('/auth/register', { username, password })
+async function register(username, password, email) {
+  const data = await api.post('/auth/register', { username, password, email })
   auth.user = data.user   // 注册成功即自动登录
+  return data.user
+}
+
+async function requestEmailCode(email) {
+  return api.post('/auth/email-code', { email })
+}
+
+async function loginWithEmailCode(email, code) {
+  const data = await api.post('/auth/email-login', { email, code })
+  auth.user = data.user
   return data.user
 }
 
@@ -56,5 +66,7 @@ export function dismissToast(id) {
   if (i >= 0) toasts.splice(i, 1)
 }
 
-export { fetchMe, login, register, logout, toasts }
+export {
+  fetchMe, login, register, requestEmailCode, loginWithEmailCode, logout, toasts,
+}
 export const authRO = readonly(auth)
