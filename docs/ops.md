@@ -221,14 +221,19 @@ OpenAI 使用 `https://api.openai.com/v1`，`gpt-4o-mini` 本身不支持旧版
 
 触发时机：
 
-- 执行成功 / 失败后；
 - 管理员驳回后；
-- 管理员调用 `POST /ops/knowledge/learn`。
+- 执行失败后；
+- 常规成功工单**不自动上报**，避免每张命令工单都产生经验；
+- 管理员可对指定工单调用 `POST /ops/knowledge/learn` 手动提炼成功案例。
+
+只生成“具体命令经验”：每条知识必须包含可复用的完整命令；没有具体
+命令、纯咨询或没有复用价值时返回空候选。
 
 流程：
 
 1. 收集工单字段、审批意见、驳回原因、执行结果和审计事件；
-2. 脱敏后作为不可信数据送入 AI，输出 1-3 条知识候选 JSON；
+2. 脱敏后作为不可信数据送入 AI，输出 1-3 条带 `command` 的知识候选；
+   没有具体命令的候选会被丢弃；
 3. 去重（`ops_knowledge.content_hash` + 同来源 pending 候选）；
 4. 创建 `kind=knowledge`、`status=pending` 的工单；
 5. 管理员在工单列表/详情审批；批准后写入 `ops_knowledge` 和 FTS，

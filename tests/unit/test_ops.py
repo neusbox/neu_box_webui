@@ -586,3 +586,18 @@ def test_agent_calls_readonly_tool_and_streams_progress(env, monkeypatch):
     assert tool_calls[0][2] == "ls"
     assert tool_calls[0][3] == {"path": "/var/log"}
     assert tool_calls[0][1] == "alice"
+
+
+def test_successful_command_does_not_auto_create_knowledge(env):
+    client = env["client"]
+    _login(client, "alice")
+    ticket_id = _create_ticket(client, command="df -h /var").get_json()[
+        "ticket"]["id"]
+    _login(client, "root")
+    assert client.post(f"/ops/tickets/{ticket_id}/approve", json={
+        "reason": "允许执行", "execute": True,
+    }).status_code == 200
+    assert client.get(f"/ops/tickets/{ticket_id}").get_json()["status"] == "succeeded"
+
+    candidates = client.get("/ops/tickets?kind=knowledge").get_json()["tickets"]
+    assert [c for c in candidates if c["source_ticket_id"] == ticket_id] == []

@@ -123,3 +123,38 @@ def test_empty_json_object_falls_through_to_next_attempt(monkeypatch):
     assert json.loads(out)["command"] == "id"
     assert len(calls) == 3
     assert calls[2].get("response_format") == {"type": "json_object"}
+
+
+def test_knowledge_requires_concrete_command(monkeypatch):
+    monkeypatch.setenv("NEUOPS_AI_ENABLED", "1")
+    monkeypatch.setenv("NEUOPS_AI_API_KEY", "test-key")
+    monkeypatch.setenv("NEUOPS_AI_MODEL", "test-model")
+
+    from neuops.master.services.rroot.ai import AIClient, extract_knowledge
+
+    def fake_complete_json(self, system_prompt, user_prompt, **kwargs):
+        return json.dumps({"entries": [{
+            "title": "泛泛经验", "content": "只是描述，没有具体命令",
+            "kind": "experience", "tags": [], "confidence": "low",
+        }]})
+
+    monkeypatch.setattr(AIClient, "complete_json", fake_complete_json)
+    entries = extract_knowledge(ticket={
+        "id": "t1", "status": "rejected", "command": "id",
+        "title": "测试", "request": "测试", "exec_result": {},
+    }, events=[], reason="test")
+    assert entries == []
+
+
+def test_fallback_knowledge_includes_command(monkeypatch):
+    monkeypatch.setenv("NEUOPS_AI_ENABLED", "0")
+    from neuops.master.services.rroot.ai import extract_knowledge
+
+    entries = extract_knowledge(ticket={
+        "id": "t1", "status": "rejected",
+        "command": "useradd -m pengyt", "title": "建用户",
+        "request": "新建用户", "exec_result": {},
+    }, events=[], reason="需要精确命令")
+    assert entries
+    assert entries[0]["command"] == "useradd -m pengyt"
+    assert "useradd -m pengyt" in entries[0]["content"]

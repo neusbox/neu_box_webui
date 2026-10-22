@@ -727,6 +727,13 @@ def learn_from_ticket(ticket_id: str, *, force: bool = False) -> list[dict]:
         return []
     if ticket.get("status") not in {"rejected", "succeeded", "failed"}:
         return []
+    # 成功的常规命令不自动上报，避免每张命令工单都产生经验候选；
+    # 管理员可以用 force=True 手动提炼成功案例。
+    if not force and ticket.get("status") == "succeeded":
+        return []
+    # 只沉淀带具体命令的经验；纯咨询/空命令不生成知识候选。
+    if not str(ticket.get("command") or "").strip():
+        return []
     if not force and _already_learning(ticket_id):
         return []
     events = store.list_events(ticket_id)
@@ -736,8 +743,13 @@ def learn_from_ticket(ticket_id: str, *, force: bool = False) -> list[dict]:
     )
     created = []
     for entry in entries:
+        entry_command = str(
+            entry.get("command") or ticket.get("command") or "").strip()
+        if not entry_command:
+            continue
         payload = {
             "title": entry["title"],
+            "command": entry_command,
             "content": entry["content"],
             "kind": entry.get("kind") or "experience",
             "tags": entry.get("tags") or [],
